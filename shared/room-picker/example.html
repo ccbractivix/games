@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Room picker example</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="room-picker.css">
+  <style>
+    body { font-family: 'Inter', sans-serif; background: #FFF8F0; color: #2d3436; }
+    main { max-width: 480px; margin: 24px auto; padding: 24px 20px; background: #fff; border: 1px solid #E8D5C0; border-radius: 14px; }
+    .submit { width: 100%; padding: 15px; margin-top: 20px; border: 0; border-radius: 12px; background: #E37433; color: white; font: 700 17px 'Inter', sans-serif; cursor: pointer; }
+    output { display: block; margin-top: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Room picker example</h1>
+  <form id="example-form">
+    <div id="room-picker"></div>
+    <button class="submit" type="submit">Continue</button>
+    <output id="result"></output>
+  </form>
+</main>
+<script src="../rooms.js"></script>
+<script src="room-picker.js"></script>
+<script>
+  const picker = ResortRoomPicker.mount(document.getElementById('room-picker'));
+  const result = document.getElementById('result');
+  document.getElementById('room-picker').addEventListener('room-picker-change', () => {
+    result.textContent = '';
+  });
+  document.getElementById('example-form').addEventListener('submit', event => {
+    event.preventDefault();
+    if (picker.validate()) result.textContent = `Selected villa: ${picker.getValue()}`;
+  });
+</script>
+</body>
+</html>
