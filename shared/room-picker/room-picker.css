@@ -1,0 +1,65 @@
+.resort-room-picker {
+  --room-picker-bg: #FFF8F0;
+  --room-picker-border: #E8D5C0;
+  --room-picker-text: #2d3436;
+  --room-picker-muted: #6b7280;
+  --room-picker-accent: #E37433;
+  --room-picker-accent-light: rgba(227,116,51,0.12);
+  font-family: 'Inter', sans-serif;
+}
+
+.resort-room-picker *, .resort-room-picker *::before, .resort-room-picker *::after {
+  box-sizing: border-box;
+}
+
+.resort-room-picker .room-picker-field { margin-bottom: 20px; }
+.resort-room-picker .room-picker-field:last-child { margin-bottom: 0; }
+.resort-room-picker .room-picker-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--room-picker-muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.resort-room-picker .room-picker-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.resort-room-picker button {
+  flex: 1;
+  padding: 11px 8px;
+  border: 1.5px solid var(--room-picker-border);
+  border-radius: 10px;
+  background: var(--room-picker-bg);
+  color: var(--room-picker-muted);
+  font: 600 15px 'Inter', sans-serif;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.resort-room-picker [data-role="building"] button { min-width: 64px; }
+.resort-room-picker button.active {
+  border-color: var(--room-picker-accent);
+  background: var(--room-picker-accent-light);
+  color: var(--room-picker-accent);
+}
+.resort-room-picker select {
+  width: 100%;
+  border: 1.5px solid var(--room-picker-border);
+  border-radius: 10px;
+  padding: 12px 40px 12px 14px;
+  font: 16px 'Inter', sans-serif;
+  color: var(--room-picker-text);
+  background: var(--room-picker-bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 14px center;
+  appearance: none;
+  transition: border-color 0.15s;
+}
+.resort-room-picker select:focus { border-color: var(--room-picker-accent); }
+.resort-room-picker .room-picker-error {
+  display: none;
+  color: #c0392b;
+  font-size: 13px;
+  margin-top: 6px;
+  font-weight: 500;
+}
+.resort-room-picker .room-picker-error.show { display: block; }
+.resort-room-picker [hidden] { display: none !important; }
