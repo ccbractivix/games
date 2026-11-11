@@ -3,12 +3,14 @@
 require('dotenv').config();
 const http = require('node:http');
 const path = require('node:path');
-const { createHmac, timingSafeEqual, randomBytes } = require('node:crypto');
+const { createHmac, timingSafeEqual, randomBytes, randomUUID } = require('node:crypto');
 const express = require('express');
 const { WebSocketServer, WebSocket } = require('ws');
 const QRCode = require('qrcode');
 const { Engine, GameError } = require('./lib/engine');
 const { createStore } = require('./lib/store');
+const { createImageStorage, prepareImage } = require('./lib/image-storage');
+const { imageLibrary } = require('./lib/picture-images');
 
 function equal(a, b) {
   const left = Buffer.from(a);
@@ -25,7 +27,7 @@ function cookies(request) {
   return result;
 }
 
-async function createApplication({ env = process.env, store: suppliedStore, timing, random } = {}) {
+async function createApplication({ env = process.env, store: suppliedStore, timing, random, imageStorage: suppliedImageStorage } = {}) {
   if (!env.HOST_PASSWORD || env.HOST_PASSWORD.length < 12) throw new Error('HOST_PASSWORD must be at least 12 characters.');
   if (!env.SESSION_SECRET || env.SESSION_SECRET.length < 32) throw new Error('SESSION_SECRET must be at least 32 characters.');
   if (env.DATABASE_SSL && !['true', 'false'].includes(env.DATABASE_SSL)) throw new Error('DATABASE_SSL must be true or false.');
@@ -38,6 +40,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
       throw new Error('PUBLIC_BASE_URL must be an origin URL, using HTTPS in production.');
     }
   }
+  const imageStorage = suppliedImageStorage || createImageStorage(env);
   const store = suppliedStore || await createStore(env);
   const app = express();
   app.set('trust proxy', 1);
@@ -46,6 +49,11 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
   const sockets = new Map();
   const online = () => new Set([...sockets.values()].filter(identity => identity.playerId).map(identity => identity.playerId));
   const engine = new Engine({ state: store.state, online, timing, random });
+  function view(auth) {
+    const result = engine.view(auth.role, auth.playerId);
+    if (auth.role === 'host') result.pictureUploadsEnabled = imageStorage.configured;
+    return result;
+  }
   let queue = Promise.resolve();
   let healthy = true;
   let stopping = false;
@@ -94,7 +102,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
         socket.close(1013, 'Connection cannot keep up; reconnect.');
         continue;
       }
-      socket.send(JSON.stringify({ type: 'state', state: engine.view(auth.role, auth.playerId) }));
+      socket.send(JSON.stringify({ type: 'state', state: view(auth) }));
     }
   }
 
@@ -150,7 +158,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
     response.set({
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:${imageStorage.imageOrigin ? ` ${imageStorage.imageOrigin}` : ''}; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
     });
     if (production) response.set('Strict-Transport-Security', 'max-age=31536000');
     if (request.path.startsWith('/api/')) response.set('Cache-Control', 'no-store');
@@ -166,7 +174,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
   app.get('/api/state', route(async (request, response) => {
     await queue;
     const auth = identity(request);
-    response.json(engine.view(auth.role, auth.playerId));
+    response.json(view(auth));
   }));
   app.get('/api/qr', route(async (request, response) => {
     const svg = await QRCode.toString(`${originOf(request)}/`, { type: 'svg', margin: 2, width: 240 });
@@ -180,7 +188,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
     const expires = Date.now() + 12 * 60 * 60 * 1000;
     const nonce = randomBytes(16).toString('hex');
     setCookie(response, 'games_host', `${expires}.${nonce}.${sign(`${expires}.${nonce}`)}`, 12 * 60 * 60 * 1000);
-    response.json(engine.view('host'));
+    response.json(view({ role: 'host', playerId: null }));
   }));
   app.post('/api/host/logout', (request, response) => {
     response.clearCookie('games_host', { path: '/', secure: production, sameSite: 'strict', httpOnly: true });
@@ -204,7 +212,53 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
     const auth = identity(request);
     rate(`command:${auth.playerId || request.ip}`, auth.role === 'host' ? 240 : 180);
     await transact(() => processCommand(auth, request.body?.action, request.body?.data, received));
-    response.json(engine.view(auth.role, auth.playerId));
+    response.json(view(auth));
+  }));
+
+  app.get('/api/picture-images/:id/file', route(async (request, response) => {
+    await queue;
+    const auth = identity(request);
+    const image = imageLibrary(engine.state).find(item => item.id === request.params.id);
+    if (!image || (auth.role !== 'host' && engine.state.round?.image?.id !== image.id)) {
+      throw new GameError('That image is not available in the current round.', 404, 'IMAGE_UNAVAILABLE');
+    }
+    if (image.kind === 'starter') {
+      return response.sendFile(path.join(__dirname, 'assets/get-the-picture', `${image.id}.svg`));
+    }
+    if (!imageStorage.configured) throw new GameError('Image storage is not configured. The host should check the R2 settings.', 503, 'IMAGE_STORAGE_UNAVAILABLE');
+    response.redirect(307, await imageStorage.url(image.key));
+  }));
+  app.post('/api/picture-images', (request, _response, next) => {
+    try {
+      if (identity(request).role !== 'host') throw new GameError('Sign in as host to upload images.', 401, 'UNAUTHORIZED');
+      if (!imageStorage.configured) throw new GameError('Configure R2 in Render before uploading images.', 503, 'IMAGE_STORAGE_UNAVAILABLE');
+      rate(`upload:${request.ip}`, 20, 60 * 60 * 1000);
+      next();
+    } catch (error) { next(error); }
+  }, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }), route(async (request, response) => {
+    const title = request.query.title;
+    const alt = request.query.alt;
+    const credit = request.query.credit;
+    if (request.query.permission !== 'true' || typeof title !== 'string' || !title.trim() || title.length > 80 ||
+      typeof alt !== 'string' || !alt.trim() || alt.length > 240 ||
+      typeof credit !== 'string' || !credit.trim() || credit.length > 160) {
+      throw new GameError('Provide a title, image description, credit, and confirmation that you may use this image.');
+    }
+    const body = await prepareImage(request.body);
+    const key = await imageStorage.upload(body);
+    try {
+      await transact(() => {
+        if (engine.state.pictureImages.length >= 200) throw new GameError('The upload library is full (200 images). Contact the operator to retire unused assets.');
+        engine.state.pictureImages.push({
+          id: randomUUID(), kind: 'r2', key, title: title.trim(), alt: alt.trim(), credit: credit.trim(),
+        });
+      });
+    } catch (error) {
+      try { await imageStorage.remove(key); }
+      catch (cleanupError) { console.error('Unable to remove unreferenced R2 upload:', key, cleanupError); }
+      throw error;
+    }
+    response.json(view({ role: 'host', playerId: null }));
   }));
 
   app.use('/shared', express.static(path.join(__dirname, 'shared')));
@@ -255,7 +309,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
         if (!(error instanceof GameError) && !(error instanceof SyntaxError)) console.error('Real-time command failed:', error);
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({
           type: 'ack', requestId: typeof message?.requestId === 'string' ? message.requestId : null,
-          ok: false, error: error instanceof GameError ? error.message : 'Unable to process the drawing. Retry or contact the host.',
+          ok: false, error: error instanceof GameError ? error.message : 'Unable to process the game action. Retry or contact the host.',
           code: error instanceof GameError ? error.code : 'SERVICE_ERROR',
         }));
       }
@@ -288,6 +342,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
     await new Promise(resolve => wss.close(resolve));
     if (server.listening) await new Promise(resolve => server.close(resolve));
     await store.close();
+    imageStorage.close();
   }
   return { app, server, engine, close, transact };
 }

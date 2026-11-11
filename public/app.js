@@ -22,11 +22,21 @@
   let requestSequence = 0;
   let fetchedSequence = 0;
   let stateRevision = 0;
+  let captionDraft = { roundId: null, text: '' };
+  let pictureModeChoice = 'small';
+  let pictureImageChoice = '';
+  let imageManagerOpen = false;
+  let policyDraft = null;
+  let displayCaptionPage = 0;
+  const readyReports = new Set();
+  const loadedPictures = new Set();
+  const uploadDraft = { file: null, title: '', alt: '', credit: '', permission: false };
   const requests = new Map();
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const isHost = () => page === 'host' && state?.role === 'host';
   const isCards = () => state?.game?.type === 'family-cards';
-  const gameTitle = () => isCards() ? 'Family Cards' : 'Pictionary';
+  const isPicture = () => state?.game?.type === 'get-the-picture';
+  const gameTitle = () => isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'Pictionary';
   const connected = () => socket?.readyState === WebSocket.OPEN;
   const shown = () => publicStages.has(state?.round?.stage);
   const timeLeft = deadline => Math.max(0, Math.ceil((deadline - (Date.now() + offset)) / 1000));
@@ -41,9 +51,9 @@
     if (!sticky) noticeTimer = setTimeout(() => { notice.hidden = true; }, 8000);
   }
 
-  async function api(path, data) {
+  async function api(path, data, uploadType = null) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), uploadType ? 60000 : 15000);
     let response;
     try {
       response = await fetch(path, {
@@ -51,8 +61,8 @@
         credentials: 'same-origin',
         cache: 'no-store',
         signal: controller.signal,
-        headers: data === undefined ? {} : { 'Content-Type': 'application/json' },
-        body: data === undefined ? undefined : JSON.stringify(data)
+        headers: data === undefined ? {} : { 'Content-Type': uploadType || 'application/json' },
+        body: data === undefined ? undefined : uploadType ? data : JSON.stringify(data)
       });
     } catch (error) {
       throw new Error(error.name === 'AbortError' ? 'The server took too long to respond. Refreshing will check whether your change saved.' : 'Cannot reach the server. Check your connection and try again.');
@@ -150,13 +160,19 @@
     stateRevision++;
     const previous = state;
     state = next;
-    document.querySelector('.brand-name').textContent = isCards() ? 'Family Cards' : 'The Big Draw';
-    document.querySelector('.brand-icon').textContent = isCards() ? '5' : '✎';
-    document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${isCards() ? 'Family Cards' : 'The Big Draw'}`;
+    if (isHost() && pictureImageChoice && !state.pictureImages.some(image => image.id === pictureImageChoice && image.enabled)) {
+      pictureImageChoice = '';
+    }
+    const title = isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
+    document.querySelector('.brand-name').textContent = title;
+    document.querySelector('.brand-icon').textContent = isPicture() ? '▣' : isCards() ? '5' : '✎';
+    document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${title}`;
     offset = next.serverTime - Date.now();
     if (previous?.round?.id !== next.round?.id || previous?.me?.artistSlot !== next.me?.artistSlot) {
       draft = null;
       optimistic = [];
+      captionDraft = { roundId: next.round?.id || null, text: '' };
+      displayCaptionPage = 0;
     }
     const own = next.round?.slots?.[next.me?.artistSlot];
     if (own) optimistic = optimistic.filter(entry => !own.drawing.some(stroke => JSON.stringify(stroke.points) === JSON.stringify(entry.stroke.points)));
@@ -181,15 +197,19 @@
     if (!force && signature === nextSignature) { drawAll(); tick(); return; }
     signature = nextSignature;
     const focus = document.activeElement;
-    const savedField = focus?.id && focus.matches('input, select') ? { id: focus.id, value: focus.value, start: focus.selectionStart, end: focus.selectionEnd } : null;
+    const savedField = focus?.id && focus.matches('input:not([type=file]), select, textarea') ? { id: focus.id, value: focus.value, start: focus.selectionStart, end: focus.selectionEnd } : null;
     const joinDraft = document.getElementById('join-form') ? {
       room: picker?.getValue(), canDraw: document.getElementById('can-draw').checked
     } : null;
     const eventDraft = document.getElementById('event-form') ? { title: document.getElementById('event-title').value, mode: document.getElementById('event-mode').value } : null;
+    const previousPicture = app.querySelector('[data-picture-image]');
     app.removeAttribute('aria-busy');
     if (page === 'host') app.innerHTML = isHost() ? hostView() : loginView();
     else if (page === 'player') app.innerHTML = state.me ? playerView() : joinView();
     else app.innerHTML = displayView();
+    if (previousPicture?.dataset.pictureImage === state.round?.id) {
+      app.querySelector('[data-picture-image]')?.replaceWith(previousPicture);
+    }
     document.body.classList.toggle('event-ended', state.event?.status === 'ended');
     document.body.dataset.roundStage = state.round?.stage || '';
     bind();
@@ -215,6 +235,11 @@
   }
 
   function joinView() {
+    if (isPicture()) return `${heading('One picture. Your funniest caption.', 'You get 30 seconds to bring the laughs, then the audience votes.', state.event?.title || 'Get The Picture')}
+      <section class="card loading"><h2>Join Get The Picture</h2><form id="join-form"><div id="room-picker"></div>
+      <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not captions or judging.</span></label>
+      <button class="full" id="join-submit"${disabled(!state.joinOpen)}>Join the fun</button><p id="join-status" class="small-text">${state.joinOpen ? 'Your silly name is waiting for you.' : 'Joining is paused.'}</p></form>
+      <p>Keep captions friendly and politics-free. One audience vote each; no voting for your own caption. Guests joining during a round can vote and submit starting next round.</p></section>`;
     if (isCards()) return `${heading('Pick a card. Get a laugh.', 'Join on your phone. The first five answers face an audience vote.', state.event?.title || 'Family Cards')}
       <section class="card loading"><h2>Join the card game</h2><form id="join-form"><div id="room-picker"></div>
       <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not your card-game eligibility.</span></label>
@@ -313,6 +338,7 @@
     if (state.event?.status === 'ended' || state.display === 'event-final') return identity() + finale();
     if (state.display === 'game-final') return identity() + gameFinal();
     if (state.display === 'scoreboard') return identity() + intro + `<div class="grid split">${leaderboard('game', 'This game')}${leaderboard('event', 'The whole show')}</div>`;
+    if (isPicture()) return identity() + intro + pictureRoundView() + leaderboard('game', 'The score so far');
     if (isCards()) return identity() + intro + cardRoundView() + leaderboard('game', 'The score so far');
     if (state.display === 'round-results') return identity() + intro + answerView() + leaderboard('round', 'This round’s stars', 5) + leaderboard('game', 'Game leaderboard');
     let content;
@@ -335,6 +361,7 @@
     if (state.display === 'game-final') return gameFinal();
     const intro = heading(state.event?.title || 'The Big Draw', state.game ? `${gameTitle()} · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'A room full of people. A world of imagination.', 'Play together');
     if (state.display === 'scoreboard') return intro + `<div class="grid split">${leaderboard('game', `${gameTitle()} leaderboard`)}${leaderboard('event', 'Variety Show leaderboard')}</div>`;
+    if (isPicture()) return intro + pictureRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isCards()) return intro + cardRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (state.display === 'round-results') return intro + answerView() + `<div class="grid split">${leaderboard('round', 'This round’s stars')}${leaderboard('game', 'Game leaderboard')}</div>`;
     if (state.round && state.display === 'round') {
@@ -378,6 +405,97 @@
       <p class="small-text">30 seconds to submit, closing early at five answers; then 30 seconds to vote. One vote each. Ranked points: 5/4/3/2/1; ties share their rank and skip the next position. Answers without votes earn no points.</p></section>${hand}${revealed ? leaderboard('round', 'This round’s stars') : ''}`;
   }
 
+  function pictureChoices(entries, action, closed = false) {
+    const me = page === 'player' ? state.me : null;
+    const revealed = ['revealed', 'results'].includes(state.round?.stage);
+    const perPage = 6;
+    const start = page === 'display' ? (displayCaptionPage % Math.max(1, Math.ceil(entries.length / perPage))) * perPage : 0;
+    const visible = page === 'display' ? entries.slice(start, start + perPage) : entries;
+    return `${page === 'display' && entries.length > perPage ? `<p class="center small-text">Captions ${start + 1}–${start + visible.length} of ${entries.length} · screen rotates · full list on phones</p>` : ''}
+      <div class="card-options">${visible.map((entry, index) => {
+        const own = entry.id === me?.ownSubmissionId;
+        const picked = action === 'vote-caption' ? me?.votedFor === entry.id : me?.nominated;
+        return `<article class="answer-card"><span class="eyebrow">Caption ${start + index + 1}${own ? ' · Yours' : ''}</span><p>${escape(entry.text)}</p>
+        ${revealed ? `<strong>${escape(entry.name)}</strong><p class="small-text">${entry.votes} votes · ${entry.points} points</p>` :
+          me ? button(action, picked ? 'Choice recorded' : own ? 'Your caption — no self-voting' : action === 'nominate-caption' ? 'Nominate this caption' : 'Vote for this caption',
+            closed || own || (action === 'vote-caption' ? !!me.votedFor : me.nominated) || timeLeft(state.round.deadline) <= 0,
+            'picture-choice', { submissionId: entry.id }) : ''}</article>`;
+      }).join('')}</div>`;
+  }
+
+  function pictureRoundView() {
+    const round = state.round;
+    const me = page === 'player' ? state.me : null;
+    const mode = state.game.pictureMode;
+    const modes = { small: 'Small room', large: 'Large audience', poolside: 'Poolside' };
+    if (!round) return `<section class="card waiting"><h2>Get The Picture</h2><span class="pill">${modes[mode]}</span><p>The host will choose an image and start the first round. Keep it friendly, respectful and politics-free.</p></section>`;
+    const live = ['loading', 'captioning', 'reviewing', 'judging', 'voting'].includes(round.stage);
+    const captioning = round.stage === 'captioning';
+    const voting = round.stage === 'voting';
+    const revealed = ['revealed', 'results'].includes(round.stage);
+    const statuses = {
+      loading: 'Loading the picture. The host starts the timer after screens are ready.',
+      captioning: `${round.submissionCount} captions received. Write your funniest caption on your phone!`,
+      reviewing: 'The host is choosing captions for the audience vote.',
+      judging: `${round.nominatedCount} of ${round.groupCount} groups nominated. Judges: choose on your phone.`,
+      voting: `${round.voteCount} votes received. Vote for your favorite on your phone!`,
+      revealed: 'The audience has spoken!', results: 'This round’s results.',
+      cancelled: 'This round was cancelled or had no eligible finalists. No points awarded.',
+    };
+    const form = me && captioning && me.canSubmit && !me.submitted ? `<form id="caption-form">
+      <label class="field">Your funniest caption<textarea id="caption" rows="3" maxlength="160" required placeholder="Keep it friendly and politics-free…">${escape(captionDraft.text)}</textarea></label>
+      <button id="submit-caption"${disabled(timeLeft(round.deadline) <= 0)}>Submit caption</button>
+      <p class="small-text">160 characters maximum. Rejected captions can be revised while time remains. Accepted captions are final.</p></form>` : '';
+    const own = me?.submitted && live ? `<p class="private">${me.captionRemoved ? 'The host removed your caption from this round.' : 'Your caption is submitted:'} ${escape(me.ownCaption)}</p>` : '';
+    const judge = me && round.stage === 'judging' ? me.isJudge ?
+      `<section class="card"><h2>You’re the judge for group ${me.groupNumber}</h2><p>${me.nominated ? 'Your nomination is recorded.' : me.judgeChoices.length ? 'Choose your group’s funniest caption. Your own caption is never among these options.' : 'There are no eligible captions from other players in your group. Your group will skip this vote.'}</p>
+      ${pictureChoices(me.judgeChoices, 'nominate-caption', me.nominated)}</section>` :
+      `<p class="private">${me.groupNumber ? `Your group ${me.groupNumber} judge is choosing a caption.` : 'You joined mid-round. You can vote when the nominees appear.'}</p>` : '';
+    const review = isHost() && live && round.review.length ? `<section class="card"><h2>Private caption review</h2>
+      <p>${mode === 'large' ? 'Approve only the captions you want the audience to see, then open voting. About five to ten finalists keeps voting manageable.' : 'The safety filter has accepted these captions. Remove anything unsuitable before or during voting.'}</p>
+      <div class="caption-review">${round.review.map(entry => `<article class="answer-card"><p>${escape(entry.text)}</p><span class="pill">${entry.removed ? 'Removed' : entry.approved ? 'Approved' : 'Filter passed'}</span><div class="actions">
+      ${mode === 'large' ? button('review-caption', 'Approve', entry.removed || entry.approved || !['captioning', 'reviewing'].includes(round.stage), 'small', { submissionId: entry.id, decision: 'approve' }) : ''}
+      ${button('review-caption', 'Remove', entry.removed, 'danger small', { submissionId: entry.id, decision: 'remove' })}</div></article>`).join('')}</div></section>` : '';
+    const hostControls = isHost() && live ? `<div class="host-actions"><p class="small-text">${round.readyCount}/${round.participantCount} players have loaded the image. Verify it is visible on the Main Display before starting the timer.</p><div class="actions">
+      ${button('start-caption-timer', 'Start 30-second caption timer', round.stage !== 'loading' || !loadedPictures.has(round.id))}
+      ${button('close-submissions', 'Close captions now', !captioning, 'secondary')}
+      ${button('open-picture-voting', 'Open audience voting', !['reviewing', 'judging'].includes(round.stage) ||
+        (round.stage === 'reviewing' ? !round.review.some(entry => entry.approved && !entry.removed) : !round.nominatedCount))}
+      ${button('close-voting', 'Close voting & show results', !voting, 'secondary')}
+      ${button('cancel-round', 'Cancel round…', false, 'danger')}</div>
+      ${mode === 'poolside' ? `<p class="small-text">${round.groups.map(group => `Group ${group.number}: ${escape(group.judge)} — ${group.nominated ? 'nominated' : `${group.choiceCount} choices`}`).join(' · ')}</p>` : ''}</div>` : '';
+    return `<section class="card"><div class="between"><div><span class="eyebrow">${modes[mode]} · Round ${round.number}</span><h2>${revealed ? 'Picture-perfect punchlines' : 'Get The Picture'}</h2></div>${timer(round.deadline)}</div>
+      <figure class="picture-frame"><img data-picture-image="${round.id}" src="${escape(round.image.url)}" alt="${escape(round.image.alt)}"><figcaption>${escape(round.image.credit)}</figcaption></figure>
+      <p class="picture-error" hidden>Image could not load. Check your connection. <button type="button" id="retry-picture" class="secondary small">Retry image</button></p>
+      <p role="status">${escape(statuses[round.stage])}</p>
+      ${me && captioning && !me.canSubmit ? '<p class="private">You joined mid-round. You can vote this round and caption starting next round.</p>' : ''}
+      ${me?.isJudge && ['loading', 'captioning'].includes(round.stage) ? `<p class="private">You’re this round’s group ${me.groupNumber} judge. Submit your own caption too; you’ll choose from the other players’ captions after time expires.</p>` : ''}
+      ${form}${own}${voting || revealed ? pictureChoices(round.finalists, 'vote-caption', !voting) : ''}
+      ${me?.votedFor && voting ? '<p class="success">Your vote is recorded.</p>' : ''}${hostControls}
+      ${isHost() && revealed ? button('round-results', 'Round results', round.stage !== 'revealed', 'secondary') : ''}
+      <p class="small-text">30 seconds to caption; 30 seconds to vote. One vote each, never for your own caption. Top-five positive-vote captions earn 5/4/3/2/1 points; ties share rank.</p></section>${judge}${review}${revealed ? leaderboard('round', 'This round’s stars') : ''}`;
+  }
+
+  function pictureLibraryView() {
+    return `<section class="card"><details id="picture-library"${imageManagerOpen ? ' open' : ''}><summary><strong>Get The Picture · Image library & safety</strong></summary>
+      <p>Six original starter illustrations are ready to use. Upload only images you have permission to display. Check each image for suitability; image content is not automatically moderated.</p>
+      <div class="image-library">${(state.pictureImages || []).map(image => `<article class="answer-card"><img src="${escape(image.url)}" alt="${escape(image.alt)}" loading="lazy"><h3>${escape(image.title)}</h3><p class="small-text">${escape(image.credit)}</p>
+      ${button('set-picture-image', image.enabled ? 'Disable image' : 'Enable image', false, 'secondary small', { imageId: image.id, enabled: !image.enabled })}</article>`).join('')}</div>
+      <h3>Upload an image</h3>${state.pictureUploadsEnabled ? `<form id="image-upload-form">
+      <label class="field">Still image (JPEG, PNG or WebP; up to 5 MB)<input id="image-file" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <p id="selected-image-name" class="small-text">${uploadDraft.file ? `Selected: ${escape(uploadDraft.file.name)}` : 'No image selected.'}</p>
+      <label class="field">Private library title<input id="image-title" maxlength="80" required value="${escape(uploadDraft.title)}"></label>
+      <label class="field">Image description for accessibility<input id="image-alt" maxlength="240" required value="${escape(uploadDraft.alt)}"></label>
+      <label class="field">Credit / source<input id="image-credit" maxlength="160" required value="${escape(uploadDraft.credit)}"></label>
+      <label class="check"><input id="image-permission" type="checkbox" required${uploadDraft.permission ? ' checked' : ''}><span>I have permission to use this image and have checked that it suits this audience.</span></label>
+      <button${disabled(false)}>Upload to games image storage</button></form>` :
+      '<p class="private">Uploads will be available after R2 is configured in Render. The starter library works now. Follow the dedicated games manual for setup; never enter storage keys here.</p>'}
+      <h3>Additional blocked words and phrases</h3><p class="small-text">One phrase per line. These add to the built-in rules; they cannot disable them. Save before opening captions.</p>
+      <form id="picture-policy-form"><textarea id="picture-policy" rows="4" maxlength="4000" aria-label="Additional blocked phrases">${escape(policyDraft ?? state.pictureBlockedTerms.join('\n'))}</textarea><button${disabled(false)}>Save safety additions</button></form>
+      <p class="small-text">Automated filtering is not a guarantee. Keep the host panel private and remove unsuitable captions. Use Large audience mode when every caption needs a human review before display.</p>
+      </details></section>`;
+  }
+
   function hostView() {
     const game = state.game;
     const round = state.round;
@@ -391,12 +509,15 @@
     let mainContent = '';
     if (state.event?.status === 'ended') mainContent = finale();
     else if (game?.status === 'ended') mainContent = gameFinal();
+    else if (isPicture()) mainContent = pictureRoundView();
     else if (isCards()) mainContent = cardRoundView();
     else if (round) mainContent = `<section class="card"><div class="between"><div><span class="eyebrow">Private host preview · Round ${round.number}</span><h2>${escape(round.stage.replaceAll('-', ' '))}</h2></div>${timer(round.deadline)}</div>${round.answer ? `<div class="prompt"><span class="small-text">Secret answer — host eyes only</span><strong>${escape(round.answer)}</strong></div>` : ''}${round.stage === 'ready' || round.stage === 'selecting' ? wheels() : ''}${drawings(true)}
       <div class="host-actions"><div class="actions">${button('select-players', 'Spin both wheels ✦', round.stage !== 'ready' || !enoughArtists)}${button('show', 'Show both drawings →', !round.slots.length || !round.slots.every(slot => slot.status === 'approved') || round.stage !== 'review')}${button('reveal', 'Reveal answer', round.stage !== 'awaiting-reveal')}${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}</div><div class="actions">${button('cancel-round', 'Cancel round…', !liveRound, 'danger')}</div></div><p class="small-text">Blank drawings retry automatically, then switch artists. If replacements run out, welcome another volunteer and use Replace artist, or cancel this round.</p></section>`;
     else mainContent = `<section class="card waiting"><span class="waiting-icon" aria-hidden="true">🎬</span><h2>${game ? 'Ready for round one?' : activeEvent ? 'Your event is open!' : 'Let’s get this show started.'}</h2><p>${activeEvent ? 'Welcome your guests, choose a game, then start a round.' : 'Open a new event to welcome guests.'}</p></section>`;
-    const controls = `<section class="card"><h2>Run the show</h2><div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">Family Cards includes toilet humor and dark themes. Start it at the host’s discretion for an appropriate audience.</p></section>`;
-    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
+    const pictureControls = `<form id="picture-game-form"><label class="field">Get The Picture format<select id="picture-mode"${disabled(!canStartGame)}>${[['small', 'Small room — all accepted captions'], ['large', 'Large audience — host-approved captions'], ['poolside', 'Poolside — rotating group judges']].map(([value, label]) => `<option value="${value}"${pictureModeChoice === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button${disabled(!canStartGame)}>Start Get The Picture</button></form>
+      ${isPicture() ? `<label class="field">Next round’s image<select id="picture-image"><option value="">Random unused image</option>${state.pictureImages.filter(image => image.enabled).map(image => `<option value="${image.id}"${pictureImageChoice === image.id ? ' selected' : ''}>${escape(image.title)}</option>`).join('')}</select></label>` : ''}`;
+    const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">Family Cards includes toilet humor and dark themes. Start it at the host’s discretion for an appropriate audience.</p></section>`;
+    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
   }
 
   function gameFinal() {
@@ -431,6 +552,7 @@
 
   async function command(action, data = {}) {
     if (busy) return;
+    if (action === 'start-round' && isPicture() && pictureImageChoice) data = { ...data, imageId: pictureImageChoice };
     if (action === 'new-event' && state.event) {
       const choice = await confirmChoice('Start completely fresh?', 'This removes EVERY registration, game, drawing and score. Guests will need to join again.', [{ label: 'Keep this event', value: false, style: 'secondary' }, { label: 'Clear everything & create event', value: true, style: 'danger' }]);
       if (!choice) return;
@@ -445,6 +567,7 @@
     render(true);
     try {
       const result = action === 'logout' ? await api('/api/host/logout', {}) : await api('/api/command', { action, data });
+      if (action === 'set-picture-policy') policyDraft = null;
       if (result?.serverTime) receive(result); else await refresh();
       // A socket opened before login carries the old role until it is reconnected.
       if (action === 'logout') socket?.close();
@@ -459,7 +582,7 @@
         if (choice === 'conclude') await runCommand(action, { ...data, allowTie: true });
         if (choice === 'round') {
           if (action === 'end-event' && state.game?.status === 'ended') {
-            if (!await runCommand('start-game', { type: state.game.type })) return;
+            if (!await runCommand('start-game', { type: state.game.type, pictureMode: state.game.pictureMode })) return;
           }
           await runCommand('start-round', {});
         }
@@ -484,6 +607,87 @@
       image.hidden = true;
       image.parentElement.querySelector('#qr-error').hidden = false;
     }));
+    document.getElementById('picture-mode')?.addEventListener('change', event => { pictureModeChoice = event.target.value; });
+    document.getElementById('picture-image')?.addEventListener('change', event => { pictureImageChoice = event.target.value; });
+    document.getElementById('picture-game-form')?.addEventListener('submit', event => {
+      event.preventDefault();
+      command('start-game', { type: 'get-the-picture', pictureMode: pictureModeChoice });
+    });
+    document.getElementById('caption')?.addEventListener('input', event => {
+      captionDraft = { roundId: state.round.id, text: event.target.value };
+    });
+    document.getElementById('caption-form')?.addEventListener('submit', event => {
+      event.preventDefault();
+      command('submit-caption', { text: document.getElementById('caption').value });
+    });
+    document.getElementById('picture-library')?.addEventListener('toggle', event => { imageManagerOpen = event.target.open; });
+    document.getElementById('picture-policy')?.addEventListener('input', event => { policyDraft = event.target.value; });
+    document.getElementById('picture-policy-form')?.addEventListener('submit', event => {
+      event.preventDefault();
+      command('set-picture-policy', { terms: document.getElementById('picture-policy').value });
+    });
+    document.getElementById('image-file')?.addEventListener('change', event => {
+      uploadDraft.file = event.target.files[0] || null;
+      document.getElementById('selected-image-name').textContent = uploadDraft.file ? `Selected: ${uploadDraft.file.name}` : 'No image selected.';
+    });
+    for (const field of ['title', 'alt', 'credit']) {
+      document.getElementById(`image-${field}`)?.addEventListener('input', event => { uploadDraft[field] = event.target.value; });
+    }
+    document.getElementById('image-permission')?.addEventListener('change', event => { uploadDraft.permission = event.target.checked; });
+    document.getElementById('image-upload-form')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      const file = uploadDraft.file;
+      if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+        notify('Choose a still JPEG, PNG or WebP image up to 5 MB.');
+        return;
+      }
+      const query = new URLSearchParams({
+        title: uploadDraft.title, alt: uploadDraft.alt, credit: uploadDraft.credit, permission: String(uploadDraft.permission),
+      });
+      busy = true;
+      render(true);
+      try {
+        const next = await api(`/api/picture-images?${query}`, file, file.type);
+        Object.assign(uploadDraft, { file: null, title: '', alt: '', credit: '', permission: false });
+        receive(next);
+        notify('Image uploaded. It is now available in the games library.');
+      } catch (error) { notify(error.message); await refresh(); }
+      finally { busy = false; render(true); }
+    });
+    const picture = app.querySelector('[data-picture-image]');
+    if (picture) {
+      const roundId = state.round.id;
+      const loaded = async () => {
+        if (!picture.isConnected || state.round?.id !== roundId) return;
+        loadedPictures.add(roundId);
+        const start = app.querySelector('[data-action="start-caption-timer"]');
+        if (start) start.disabled = busy || state.round?.stage !== 'loading';
+        const errorMessage = app.querySelector('.picture-error');
+        if (errorMessage) errorMessage.hidden = true;
+        if (page !== 'player' || !state.me?.participant || state.me.imageReady || readyReports.has(roundId) ||
+          !['loading', 'captioning'].includes(state.round?.stage) || state.round.id !== roundId) return;
+        readyReports.add(roundId);
+        try { receive(await api('/api/command', { action: 'picture-ready', data: {} })); }
+        catch (error) { notify(`Could not confirm image readiness: ${error.message}`); }
+        finally { readyReports.delete(roundId); }
+      };
+      picture.onload = loaded;
+      picture.onerror = () => {
+        if (!picture.isConnected || state.round?.id !== roundId) return;
+        loadedPictures.delete(roundId);
+        app.querySelector('.picture-error').hidden = false;
+        const start = app.querySelector('[data-action="start-caption-timer"]');
+        if (start) start.disabled = true;
+      };
+      if (picture.complete) {
+        if (picture.naturalWidth) loaded();
+        else picture.onerror();
+      }
+      document.getElementById('retry-picture')?.addEventListener('click', () => {
+        picture.src = `${state.round.image.url}?retry=${Date.now()}`;
+      });
+    }
     const joinForm = document.getElementById('join-form');
     if (joinForm) {
       picker = window.ResortRoomPicker.mount(document.getElementById('room-picker'), { name: 'room' });
@@ -682,6 +886,16 @@
         (submitting ? state.round.stage !== 'submitting' || !state.me.canSubmit || state.me.submitted :
           state.round.stage !== 'voting' || !!state.me.votedFor || payload.submissionId === state.me.ownSubmissionId);
     });
+    app.querySelectorAll('#caption-form textarea, #submit-caption').forEach(element => {
+      element.disabled = busy || state.round?.stage !== 'captioning' || timeLeft(state.round.deadline) <= 0;
+    });
+    app.querySelectorAll('button.picture-choice').forEach(element => {
+      const voting = element.dataset.action === 'vote-caption';
+      const payload = JSON.parse(element.dataset.payload);
+      element.disabled = busy || !state.round || timeLeft(state.round.deadline) <= 0 ||
+        (voting ? state.round.stage !== 'voting' || !!state.me?.votedFor || payload.submissionId === state.me?.ownSubmissionId :
+          state.round.stage !== 'judging' || !state.me?.isJudge || state.me?.nominated);
+    });
     updateDrawControls();
   }
 
@@ -691,6 +905,13 @@
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   setInterval(tick, 250);
+  setInterval(() => {
+    if (page === 'display' && isPicture() && state.round?.finalists.length > 6 &&
+      ['voting', 'revealed', 'results'].includes(state.round.stage)) {
+      displayCaptionPage++;
+      render(true);
+    }
+  }, 8000);
   setInterval(() => { if (!connected() && !busy) refresh(); }, 15000);
   refresh();
   connect();

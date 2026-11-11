@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <rect width="1200" height="800" fill="#ddf3ff"/>
+  <path d="M0 350H1200V550H0Z" fill="#67d1db"/><path d="M0 550H1200V800H0Z" fill="#fae2ad"/>
+  <circle cx="1000" cy="130" r="70" fill="#ffda71"/>
+  <path d="M180 800Q180 300 130 170" fill="none" stroke="#ac7d58" stroke-width="40"/>
+  <path d="M130 170Q40 60 0 220M130 170Q240 60 340 190M130 170Q160 20 240 0" fill="none" stroke="#3b9875" stroke-width="40"/>
+  <path d="M510 235L450 100L555 160L590 55L635 165L750 90L690 240" fill="#42966a" stroke="#413c67" stroke-width="8"/>
+  <ellipse cx="600" cy="340" rx="140" ry="170" fill="#ffc85b" stroke="#413c67" stroke-width="8"/>
+  <path d="M490 250L700 430M470 330L650 490M530 190L730 360M710 250L500 430M730 330L550 490M670 190L470 360" stroke="#d99c36" stroke-width="8"/>
+  <path d="M480 290H585L580 345H500ZM615 290H720L700 345H620ZM580 300H620" fill="#302b48" stroke="#302b48" stroke-width="12"/>
+  <path d="M565 390Q600 425 635 390" fill="none" stroke="#413c67" stroke-width="9"/>
+  <path d="M350 510H900V570H350ZM385 570H420V780H385ZM830 570H865V780H830Z" fill="#b88761" stroke="#413c67" stroke-width="8"/>
+  <path d="M580 500L550 390H810L840 500Z" fill="#c6c2df" stroke="#413c67" stroke-width="8"/>
+  <circle cx="695" cy="450" r="15" fill="#fff"/>
+  <path d="M440 460H490V510H440Z" fill="#fff" stroke="#413c67" stroke-width="6"/><path d="M490 470Q530 470 490 500" fill="none" stroke="#413c67" stroke-width="6"/>
+</svg>
