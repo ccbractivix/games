@@ -6,6 +6,7 @@ node_modules/
 .env.*
 !.env.example
 .data/
+.venv/
 
 # Logs and local tooling output
 npm-debug.log*

@@ -23,7 +23,9 @@ For local development, create `.env` from `.env.example`. Leave `DATABASE_URL` c
 
 ## Local screens
 
-After starting the service, use `/host` for private event controls, `/` for the guest joining and play screen, and `/display` for the sanitized projection screen. Sign in with the local `HOST_PASSWORD`, open a standalone or Variety Show event, then start Pictionary. Guest devices should open the same service address; localhost is only reachable on the computer running it.
+After starting the service, use `/host` for private event controls, `/` for the guest joining and play screen, and `/display` for the sanitized projection screen. Sign in with the local `HOST_PASSWORD`, open a standalone or Variety Show event, then choose Big Draw (Pictionary) or Family Cards. Guest devices should open the same service address; localhost is only reachable on the computer running it.
+
+Family Cards gives each phone ten private answer cards. The first five submissions become anonymous finalists for a 30-second audience vote, with no self-voting. Positive-vote answers earn 5/4/3/2/1 points by rank, ties included; points also accumulate across Variety Show games. The host decides whether the supplied deck's humor suits the audience. See the manual's Family Cards section for operation, card maintenance and usage-permission considerations.
 
 ## Production
 
