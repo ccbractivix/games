@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Local environment and game state
+.env
+.env.*
+!.env.example
+.data/
+
+# Logs and local tooling output
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.DS_Store
