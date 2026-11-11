@@ -25,6 +25,8 @@
   const requests = new Map();
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const isHost = () => page === 'host' && state?.role === 'host';
+  const isCards = () => state?.game?.type === 'family-cards';
+  const gameTitle = () => isCards() ? 'Family Cards' : 'Pictionary';
   const connected = () => socket?.readyState === WebSocket.OPEN;
   const shown = () => publicStages.has(state?.round?.stage);
   const timeLeft = deadline => Math.max(0, Math.ceil((deadline - (Date.now() + offset)) / 1000));
@@ -148,12 +150,15 @@
     stateRevision++;
     const previous = state;
     state = next;
+    document.querySelector('.brand-name').textContent = isCards() ? 'Family Cards' : 'The Big Draw';
+    document.querySelector('.brand-icon').textContent = isCards() ? '5' : '✎';
+    document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${isCards() ? 'Family Cards' : 'The Big Draw'}`;
     offset = next.serverTime - Date.now();
     if (previous?.round?.id !== next.round?.id || previous?.me?.artistSlot !== next.me?.artistSlot) {
       draft = null;
       optimistic = [];
     }
-    const own = next.round?.slots[next.me?.artistSlot];
+    const own = next.round?.slots?.[next.me?.artistSlot];
     if (own) optimistic = optimistic.filter(entry => !own.drawing.some(stroke => JSON.stringify(stroke.points) === JSON.stringify(entry.stroke.points)));
     if (!canDrawNow()) draft = null;
     render();
@@ -210,6 +215,11 @@
   }
 
   function joinView() {
+    if (isCards()) return `${heading('Pick a card. Get a laugh.', 'Join on your phone. The first five answers face an audience vote.', state.event?.title || 'Family Cards')}
+      <section class="card loading"><h2>Join the card game</h2><form id="join-form"><div id="room-picker"></div>
+      <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not your card-game eligibility.</span></label>
+      <button class="full" id="join-submit"${disabled(!state.joinOpen)}>Join the fun</button><p id="join-status" class="small-text">${state.joinOpen ? 'Your silly name is waiting for you.' : 'Joining is paused.'}</p></form>
+      <p>Ten private answer cards. Five anonymous finalists. Everyone votes, but never for their own answer. Guests joining mid-round can vote immediately and submit starting next round.</p></section>`;
     return `${heading('Big laughs. Little doodles.', 'Join the room, get a silly name, and let your imagination do the rest.', state.event?.title || 'The Big Draw')}
       <div class="grid join-layout"><section class="card"><span class="eyebrow">Your ticket to the fun</span><h2>Let’s get you in</h2>
       <form id="join-form"><div id="room-picker"></div><label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Pick me to draw!</strong>I’m happy to use my finger, mouse or pen. Uncheck to just guess.</span></label>
@@ -283,7 +293,7 @@
   }
 
   function canDrawNow() {
-    const slot = state?.round?.slots[state.me?.artistSlot];
+    const slot = state?.round?.slots?.[state.me?.artistSlot];
     return page === 'player' && state?.me?.artistSlot !== null && slot?.status === 'drawing' && (!slot.deadline || timeLeft(slot.deadline) > 0);
   }
 
@@ -299,10 +309,11 @@
   }
 
   function playerView() {
-    const intro = heading(state.event?.title || 'You’re on the guest list!', state.game ? `Pictionary · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'Hang tight — the host will start the fun.', 'Your play space');
+    const intro = heading(state.event?.title || 'You’re on the guest list!', state.game ? `${gameTitle()} · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'Hang tight — the host will start the fun.', 'Your play space');
     if (state.event?.status === 'ended' || state.display === 'event-final') return identity() + finale();
     if (state.display === 'game-final') return identity() + gameFinal();
     if (state.display === 'scoreboard') return identity() + intro + `<div class="grid split">${leaderboard('game', 'This game')}${leaderboard('event', 'The whole show')}</div>`;
+    if (isCards()) return identity() + intro + cardRoundView() + leaderboard('game', 'The score so far');
     if (state.display === 'round-results') return identity() + intro + answerView() + leaderboard('round', 'This round’s stars', 5) + leaderboard('game', 'Game leaderboard');
     let content;
     const contributor = state.me.hasContributed;
@@ -322,8 +333,9 @@
   function displayView() {
     if (state.display === 'event-final' || state.event?.status === 'ended') return finale();
     if (state.display === 'game-final') return gameFinal();
-    const intro = heading(state.event?.title || 'The Big Draw', state.game ? `Pictionary · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'A room full of people. A world of imagination.', 'Play together');
-    if (state.display === 'scoreboard') return intro + `<div class="grid split">${leaderboard('game', 'Pictionary leaderboard')}${leaderboard('event', 'Variety Show leaderboard')}</div>`;
+    const intro = heading(state.event?.title || 'The Big Draw', state.game ? `${gameTitle()} · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'A room full of people. A world of imagination.', 'Play together');
+    if (state.display === 'scoreboard') return intro + `<div class="grid split">${leaderboard('game', `${gameTitle()} leaderboard`)}${leaderboard('event', 'Variety Show leaderboard')}</div>`;
+    if (isCards()) return intro + cardRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (state.display === 'round-results') return intro + answerView() + `<div class="grid split">${leaderboard('round', 'This round’s stars')}${leaderboard('game', 'Game leaderboard')}</div>`;
     if (state.round && state.display === 'round') {
       if (shown()) return `${state.round.stage === 'guessing' ? `<div class="guess-progress" role="progressbar" aria-label="Guessing time remaining" aria-valuemin="0" aria-valuemax="30" data-progress-deadline="${state.round.deadline}"><div class="guess-progress-fill"></div><span></span></div>` : ''}` + intro + `<section class="card">${drawings()}${answerView()}<div class="center round-meta center-meta"><h2>${state.round.stage === 'guessing' ? 'Two doodles. One answer. Guess on your device!' : state.round.stage === 'awaiting-reveal' ? 'Time’s up! What could it be?' : 'Did you guess it?'}</h2>${timer(state.round.deadline)}</div></section>`;
@@ -333,7 +345,37 @@
   }
 
   function newEventForm() {
-    return `<section class="card"><h2>Set the stage</h2><form id="event-form"><label class="field">Event name<input id="event-title" maxlength="80" placeholder="Tonight’s Big Draw" value="${escape(state.event?.title || 'The Big Draw')}"></label><label class="field">Format<select id="event-mode"><option value="standalone">Pictionary — one game</option><option value="variety"${state.event?.mode === 'variety' ? ' selected' : ''}>Variety Show — cumulative games</option></select></label><button class="full"${disabled(false)}>${state.event ? 'Create a fresh event…' : 'Open new event →'}</button></form><p class="small-text">${state.event ? 'A new event clears all registrations, drawings and scores.' : 'Guests can join once you open an event.'}</p></section>`;
+    return `<section class="card"><h2>Set the stage</h2><form id="event-form"><label class="field">Event name<input id="event-title" maxlength="80" placeholder="Tonight’s games" value="${escape(state.event?.title || 'The Big Draw')}"></label><label class="field">Format<select id="event-mode"><option value="standalone">Standalone — choose one game below</option><option value="variety"${state.event?.mode === 'variety' ? ' selected' : ''}>Variety Show — cumulative games</option></select></label><button class="full"${disabled(false)}>${state.event ? 'Create a fresh event…' : 'Open new event →'}</button></form><p class="small-text">${state.event ? 'A new event clears all registrations, hands and scores.' : 'Guests can join once you open an event.'}</p></section>`;
+  }
+
+  function cardRoundView() {
+    const round = state.round;
+    const me = page === 'player' ? state.me : null;
+    const revealed = round && ['revealed', 'results'].includes(round.stage);
+    const submitting = round?.stage === 'submitting';
+    const voting = round?.stage === 'voting';
+    const finalists = round?.finalists || [];
+    const status = !round ? 'The host will start the first round.' :
+      submitting ? `${round.submissionCount} of 5 answers received. Choose on your phone!` :
+      voting ? `${round.voteCount} votes received. Vote for your favorite on your phone!` :
+      revealed ? 'Audience results are in!' : 'No points awarded. The host can start another round.';
+    const answers = finalists.length ? `<div class="card-options">${finalists.map((finalist, index) => {
+      const own = finalist.id === me?.ownSubmissionId;
+      const voted = finalist.id === me?.votedFor;
+      return `<article class="answer-card"><span class="eyebrow">Answer ${index + 1}${own ? ' · Yours' : ''}</span><p>${escape(finalist.text)}</p>
+        ${revealed ? `<strong>${escape(finalist.name)}</strong><p class="small-text">${finalist.votes} votes · ${finalist.points} points</p>` :
+          me ? button('vote-card', voted ? 'Vote recorded' : own ? 'Your answer — no self-voting' : `Vote for answer ${index + 1}`,
+            !voting || own || !!me.votedFor || timeLeft(round.deadline) <= 0, 'card-choice', { submissionId: finalist.id }) : ''}</article>`;
+    }).join('')}</div>` : '';
+    const hand = me && (!round || submitting) ? `<section class="card"><h2>Your private hand</h2>
+      <p>${me.submitted ? 'Your answer is submitted. Wait for the finalists.' : round && !me.canSubmit ? 'You joined during this round. Submit starting next round; you can vote this round.' : 'Tap one card to submit it immediately. Only the first five answers received become finalists.'}</p>
+      <div class="card-options">${me.hand.map(card => button('submit-card', escape(card.text),
+        !submitting || !me.canSubmit || me.submitted || timeLeft(round.deadline) <= 0, 'answer-card card-choice', { cardId: card.id })).join('')}</div></section>` : '';
+    return `<section class="card"><div class="between"><h2>${!round ? 'Ready for some laughs?' : submitting ? 'Choose your answer' : voting ? `${finalists.length} ${finalists.length === 1 ? 'answer' : 'answers'}. Your choice.` : 'Round complete'}</h2>${timer(round?.deadline)}</div>
+      ${round ? `<div class="card-prompt">${escape(round.prompt)}</div>` : '<p>Ten private cards per player. First five answers become anonymous finalists. Everyone votes, except for their own answer.</p>'}
+      <p role="status">${escape(status)}</p>${me?.votedFor && voting ? '<p class="success">Your vote is recorded. Results appear when voting closes.</p>' : ''}${answers}
+      ${isHost() && round ? `<div class="actions host-actions">${button('close-submissions', 'Close submissions now', !submitting)}${button('close-voting', 'Close voting & show results', !voting)}${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}${button('cancel-round', 'Cancel round…', !submitting && !voting, 'danger')}</div>` : ''}
+      <p class="small-text">30 seconds to submit, closing early at five answers; then 30 seconds to vote. One vote each. Ranked points: 5/4/3/2/1; ties share their rank and skip the next position. Answers without votes earn no points.</p></section>${hand}${revealed ? leaderboard('round', 'This round’s stars') : ''}`;
   }
 
   function hostView() {
@@ -344,18 +386,21 @@
     const roundDone = !round || ['revealed', 'results', 'cancelled'].includes(round.stage);
     const liveRound = round && !['revealed', 'results', 'cancelled'].includes(round.stage);
     const enoughArtists = state.players.filter(player => player.online && player.canDraw && !player.excluded).length >= 2;
+    const enoughPlayers = state.players.filter(player => player.online).length >= 2;
+    const canStartGame = activeEvent && !activeGame && (!game || state.event.mode === 'variety');
     let mainContent = '';
     if (state.event?.status === 'ended') mainContent = finale();
     else if (game?.status === 'ended') mainContent = gameFinal();
+    else if (isCards()) mainContent = cardRoundView();
     else if (round) mainContent = `<section class="card"><div class="between"><div><span class="eyebrow">Private host preview · Round ${round.number}</span><h2>${escape(round.stage.replaceAll('-', ' '))}</h2></div>${timer(round.deadline)}</div>${round.answer ? `<div class="prompt"><span class="small-text">Secret answer — host eyes only</span><strong>${escape(round.answer)}</strong></div>` : ''}${round.stage === 'ready' || round.stage === 'selecting' ? wheels() : ''}${drawings(true)}
       <div class="host-actions"><div class="actions">${button('select-players', 'Spin both wheels ✦', round.stage !== 'ready' || !enoughArtists)}${button('show', 'Show both drawings →', !round.slots.length || !round.slots.every(slot => slot.status === 'approved') || round.stage !== 'review')}${button('reveal', 'Reveal answer', round.stage !== 'awaiting-reveal')}${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}</div><div class="actions">${button('cancel-round', 'Cancel round…', !liveRound, 'danger')}</div></div><p class="small-text">Blank drawings retry automatically, then switch artists. If replacements run out, welcome another volunteer and use Replace artist, or cancel this round.</p></section>`;
-    else mainContent = `<section class="card waiting"><span class="waiting-icon" aria-hidden="true">🎬</span><h2>${game ? 'Ready for round one?' : activeEvent ? 'Your event is open!' : 'Let’s get this show started.'}</h2><p>${activeEvent ? 'Welcome your guests, start Pictionary, then create a round and spin the wheels.' : 'Open a new event to welcome guests.'}</p></section>`;
-    const controls = `<section class="card"><h2>Run the show</h2><div class="actions">${button('start-game', game?.status === 'ended' ? 'Start next Pictionary game' : 'Start Pictionary', !activeEvent || !!activeGame, '', { type: 'pictionary' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !enoughArtists)}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${enoughArtists ? 'Two artists, independent 30-second drawing timers, then your review.' : 'You need at least two online drawing volunteers to start a round.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p></section>`;
+    else mainContent = `<section class="card waiting"><span class="waiting-icon" aria-hidden="true">🎬</span><h2>${game ? 'Ready for round one?' : activeEvent ? 'Your event is open!' : 'Let’s get this show started.'}</h2><p>${activeEvent ? 'Welcome your guests, choose a game, then start a round.' : 'Open a new event to welcome guests.'}</p></section>`;
+    const controls = `<section class="card"><h2>Run the show</h2><div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">Family Cards includes toilet humor and dark themes. Start it at the host’s discretion for an appropriate audience.</p></section>`;
     return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
   }
 
   function gameFinal() {
-    return `${heading('What a game!', state.event?.mode === 'variety' ? 'Keep those smiles. The next game will begin here automatically.' : 'You made every doodle count.', 'Pictionary · final standings')}<div class="grid split">${leaderboard('game', 'Our Pictionary stars', 3)}${leaderboard('event', 'The show so far', 5)}</div>`;
+    return `${heading('What a game!', state.event?.mode === 'variety' ? 'Keep those smiles. The host will choose the next game.' : 'Thanks for playing!', `${gameTitle()} · final standings`)}<div class="grid split">${leaderboard('game', `Our ${gameTitle()} stars`, 3)}${leaderboard('event', 'The show so far', 5)}</div>`;
   }
 
   function finale() {
@@ -414,7 +459,7 @@
         if (choice === 'conclude') await runCommand(action, { ...data, allowTie: true });
         if (choice === 'round') {
           if (action === 'end-event' && state.game?.status === 'ended') {
-            if (!await runCommand('start-game', { type: 'pictionary' })) return;
+            if (!await runCommand('start-game', { type: state.game.type })) return;
           }
           await runCommand('start-round', {});
         }
@@ -490,7 +535,7 @@
   }
 
   function updateDrawControls() {
-    const own = state?.round?.slots[state.me?.artistSlot];
+    const own = state?.round?.slots?.[state.me?.artistSlot];
     const allowed = canDrawNow() && connected() && !busy;
     const pad = document.getElementById('draw-pad');
     if (pad) pad.setAttribute('aria-disabled', String(!allowed));
@@ -552,7 +597,7 @@
   }
 
   function inkCapacity() {
-    const slot = state?.round?.slots[state.me?.artistSlot];
+    const slot = state?.round?.slots?.[state.me?.artistSlot];
     const strokes = [...(slot?.drawing || []), ...optimistic.map(entry => entry.stroke)];
     const points = strokes.reduce((sum, stroke) => sum + stroke.points.length, 0) + (draft?.points.length || 0);
     return strokes.length < 200 && points < 8000;
@@ -576,7 +621,7 @@
   function drawAll() {
     app.querySelectorAll('[data-drawing]').forEach(svg => {
       const index = Number(svg.dataset.drawing);
-      const slot = state?.round?.slots[index];
+      const slot = state?.round?.slots?.[index];
       const group = svg.querySelector('.strokes');
       if (!group) return;
       const strokes = [...(slot?.drawing || [])];
@@ -604,7 +649,7 @@
   }
 
   function tick() {
-    const deadline = state?.round?.slots[state.me?.artistSlot]?.deadline;
+    const deadline = state?.round?.slots?.[state.me?.artistSlot]?.deadline;
     if (draft && deadline && timeLeft(deadline) <= 1 && canDrawNow() && connected() && Date.now() - draft.started >= 250) {
       const pointerId = draft.pointerId;
       const last = draft.points.at(-1);
@@ -629,6 +674,13 @@
     });
     document.querySelectorAll('#guess-form input, #guess-form button').forEach(element => {
       element.disabled = busy || timeLeft(state.round.deadline) <= 0;
+    });
+    app.querySelectorAll('button.card-choice').forEach(element => {
+      const submitting = element.dataset.action === 'submit-card';
+      const payload = JSON.parse(element.dataset.payload);
+      element.disabled = busy || !state.round || timeLeft(state.round.deadline) <= 0 ||
+        (submitting ? state.round.stage !== 'submitting' || !state.me.canSubmit || state.me.submitted :
+          state.round.stage !== 'voting' || !!state.me.votedFor || payload.submissionId === state.me.ownSubmissionId);
     });
     updateDrawControls();
   }

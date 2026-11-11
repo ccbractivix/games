@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { WebSocket } = require('ws');
 const { createApplication } = require('../server');
-const { freshState } = require('../lib/engine');
+const { Engine, freshState } = require('../lib/engine');
 const { createStore } = require('../lib/store');
 
 const ENV = { HOST_PASSWORD: 'test-only-host-password', SESSION_SECRET: 'test-only-session-secret-at-least-32-characters' };
@@ -55,6 +55,88 @@ test('host protection, same-origin enforcement, joins, privacy and QR endpoint',
   assert.equal(qr.status, 200);
   assert.match(qr.headers.get('content-type'), /svg/);
   assert.match(await qr.text(), /<svg/);
+});
+
+test('60 connected phones accept exactly five card answers, vote anonymously and persist ranked event points', { timeout: 20000 }, async t => {
+  const { engine, transact, post, base, snapshots } = await service(t, {
+    timing: { submissions: 60000, voting: 60000 },
+  });
+  const { cookie: hostCookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const host = (action, data = {}) => post('/api/command', { action, data }, hostCookie);
+  await host('new-event', { mode: 'variety' });
+  const phones = [];
+  for (let index = 0; index < 60; index++) {
+    const joined = await post('/api/join', { room: '1104', canDraw: false });
+    assert.equal(joined.status, 200);
+    const socket = new WebSocket(`${base.replace('http', 'ws')}/ws`, {
+      origin: base, headers: { Cookie: joined.cookie },
+    });
+    socket.on('message', raw => {
+      const message = JSON.parse(raw);
+      if (message.type === 'state') socket.lastState = message.state;
+    });
+    await once(socket, 'message');
+    phones.push({ socket, cookie: joined.cookie, id: joined.body.me.id });
+  }
+  assert.equal(engine.online().size, 60);
+  assert.equal((await host('start-game', { type: 'family-cards' })).status, 200);
+  assert.equal((await host('start-round')).status, 200);
+  const responses = await Promise.all(phones.map(phone => post('/api/command', {
+    action: 'submit-card',
+    data: { cardId: engine.view('player', phone.id).me.hand[0].id },
+  }, phone.cookie)));
+  assert.equal(responses.filter(response => response.status === 200).length, 5);
+  assert.equal(responses.filter(response => response.status === 400).length, 55);
+  assert.equal(engine.state.round.submissions.length, 5);
+  assert.equal(engine.state.round.stage, 'voting');
+  const publicSocket = new WebSocket(`${base.replace('http', 'ws')}/ws?display=1`, {
+    origin: base, headers: { Cookie: hostCookie },
+  });
+  const [raw] = await once(publicSocket, 'message');
+  const publicState = JSON.parse(raw).state;
+  assert.equal(publicState.me, null);
+  assert.equal(publicState.round.finalists.length, 5);
+  assert.ok(publicState.round.finalists.every(answer => Object.keys(answer).sort().join() === 'id,text'));
+  assert.ok(!Object.hasOwn(publicState, 'cards'));
+  const finalists = engine.state.round.submissions;
+  const finalistIds = new Set(finalists.map(answer => answer.playerId));
+  const audience = phones.filter(phone => !finalistIds.has(phone.id));
+  const ballots = [];
+  let nextVoter = 0;
+  [19, 14, 9, 7, 6].forEach((count, answer) => {
+    for (let index = 0; index < count; index++) {
+      ballots.push({ phone: audience[nextVoter++], submissionId: finalists[answer].id });
+    }
+  });
+  finalists.forEach((answer, index) => {
+    ballots.push({
+      phone: phones.find(phone => phone.id === answer.playerId),
+      submissionId: finalists[(index + 1) % 5].id,
+    });
+  });
+  const voted = await Promise.all(ballots.map(ballot => post('/api/command', {
+    action: 'vote-card', data: { submissionId: ballot.submissionId },
+  }, ballot.phone.cookie)));
+  assert.ok(voted.every(response => response.status === 200));
+  assert.equal(engine.state.round.votes.length, 60);
+  assert.equal(engine.state.awards.length, 0);
+  assert.equal((await post('/api/command', {
+    action: 'vote-card', data: { submissionId: ballots[0].submissionId },
+  }, ballots[0].phone.cookie)).status, 400);
+  await transact(() => engine.tick(engine.state.round.deadline));
+  assert.deepEqual(engine.view().round.finalists.map(answer => answer.votes), [20, 15, 10, 8, 7]);
+  assert.deepEqual(engine.view().leaderboards.round.map(answer => answer.score), [5, 4, 3, 2, 1]);
+  const saved = snapshots.at(-1);
+  assert.equal(saved.awards.length, 5);
+  assert.equal(saved.awards.reduce((total, award) => total + award.points, 0), 15);
+  assert.ok(saved.awards.every(award => award.reason === 'audience-vote'));
+  assert.equal((await host('end-game', { allowTie: true })).status, 200);
+  assert.equal((await host('start-game', { type: 'pictionary' })).status, 200);
+  assert.equal(engine.state.players.reduce((total, player) => total + player.eventScore, 0), 15);
+  assert.ok(engine.state.players.every(player => player.gameScore === 0));
+  assert.equal((await post('/api/join', { room: '1104', canDraw: false }, phones[0].cookie)).body.me.id, phones[0].id);
+  publicSocket.close();
+  await once(publicSocket, 'close');
 });
 
 test('WebSocket public view stays sanitized even with a host cookie and rejects foreign origins', async t => {
@@ -117,6 +199,41 @@ test('production refuses missing persistence and startup refuses missing credent
   await assert.rejects(createStore({ NODE_ENV: 'production' }), /DATABASE_URL/);
   await assert.rejects(createApplication({ env: {} }), /HOST_PASSWORD/);
   await assert.rejects(createApplication({ env: { HOST_PASSWORD: ENV.HOST_PASSWORD } }), /SESSION_SECRET/);
+});
+
+test('a saved card ballot survives service restart and expired voting is scored only once', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'resort-cards-test-'));
+  const file = path.join(directory, 'state.json');
+  t.after(async () => {
+    await fs.unlink(file);
+    await fs.rmdir(directory);
+  });
+  const engine = new Engine();
+  engine.command('host', null, 'new-event', { mode: 'variety' });
+  const players = Array.from({ length: 2 }, () => engine.join({ room: '1104', canDraw: false }));
+  engine.online = () => new Set(players.map(player => player.id));
+  engine.command('host', null, 'start-game', { type: 'family-cards' });
+  engine.command('host', null, 'start-round', {}, 1000);
+  engine.command('player', players[0].id, 'submit-card', {
+    cardId: engine.view('player', players[0].id).me.hand[0].id,
+  }, 1001);
+  engine.command('host', null, 'close-submissions', {}, 1002);
+  engine.command('player', players[1].id, 'vote-card', {
+    submissionId: engine.state.round.submissions[0].id,
+  }, 1003);
+  const hand = engine.view('player', players[1].id).me.hand;
+  const store = await createStore({ DATA_FILE: file });
+  await store.save(engine.state);
+  await store.close();
+  for (let restart = 0; restart < 2; restart++) {
+    const recovered = await createApplication({ env: ENV, store: await createStore({ DATA_FILE: file }) });
+    assert.equal(recovered.engine.state.round.stage, 'revealed');
+    assert.equal(recovered.engine.state.awards.length, 1);
+    assert.equal(recovered.engine.player(players[0].id).eventScore, 5);
+    assert.equal(recovered.engine.player(players[1].id).token, players[1].token);
+    assert.deepEqual(recovered.engine.view('player', players[1].id).me.hand, hand);
+    await recovered.close();
+  }
 });
 
 test('60 connected phones complete a round with private previews and exactly 17 persisted points', { timeout: 15000 }, async t => {

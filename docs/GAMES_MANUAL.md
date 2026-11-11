@@ -91,7 +91,7 @@ Domain registration, purchase, and Vercel are not required.
 - The service stores player identities and scores for the current event. **Conclude event** ends the event without clearing its registrations and scores. **New event** is the destructive reset: it clears guest registrations, scores, rooms, and game state; old guest cookies no longer identify players, while the independent host login cookie remains valid. Treat the snapshot as event data; arrange any needed records and retention with the resort before resetting.
 - Keep provider backups only as long as needed for recovery and applicable resort retention rules. A backup can contain player and score data; restrict access and allow provider-retained backups to expire under the provider's configured policy.
 - No room cap is imposed. Each browser may join one player session at a time; the same participant can use another browser/device to join a different room. Share the browser and room-code expectations with guests.
-- Guest-facing prompts are curated for all ages and English. Offer a standby option and allow guests to opt out rather than requiring participation.
+- Big Draw prompts are curated for all ages and English. Family Cards uses the supplied Family Edition deck, including toilet humor and dark themes; the host decides whether it is appropriate for the audience. Offer a standby option and allow guests to opt out rather than requiring participation.
 
 ## Running an event
 
@@ -102,7 +102,7 @@ Use a laptop connected to the TV/projector by HDMI for the most predictable disp
 The game runs on Render, not on the laptop: the laptop needs only a modern browser. Guests can use resort Wi-Fi or mobile data; they do not need the same local network. Complete any Wi-Fi sign-in page before joining. Artists should keep their phone screen open during their drawing attempt. For local phone testing only, use the laptop's LAN address instead of `localhost`; do not expose the development server to the public internet.
 
 1. Open `/host` and sign in with `HOST_PASSWORD`.
-2. Create an event and choose its title and format: standalone Pictionary or Variety Show. The event opens guest registration.
+2. Create an event and choose its title and format: standalone (one game) or Variety Show. The event opens guest registration. Choose **Start Big Draw** or **Start Family Cards** from the host controls.
 3. Give guests the QR code or site URL. Guests choose a building, room, and (where offered) unit using the room picker, choose whether they are willing to draw, and join. The game assigns a silly player name. There is no typed room-code flow.
 4. Open `/display?display=1` on the projection device. Keep host controls private. This public display view stays sanitized even if opened in a browser that also has a host login.
 5. Start Pictionary from the host view, then start a new round. The host does not choose the prompt; the game randomly selects a secret word and its two parts.
@@ -130,6 +130,40 @@ The game runs on Render, not on the laptop: the laptop needs only a modern brows
 - The final event screen says **Thank You For Playing** on white. Two black stick figures are drawn, followed by a red heart. Reduced-motion settings show the finished scene without animation.
 - Price Is Right is a possible future addition, not an implemented game. Do not advertise it as available.
 
+### Family Cards
+
+Family Cards is the phone-based audience-vote adaptation of the supplied `docs/CAH_Family_SmallCards.pdf`. It is a different game from Big Draw, available either standalone or as the next Variety Show game. It uses the same joining URL, host login, public `/display`, persistence and event leaderboard; no additional hosting service or account is required. Launch it only when the host considers the deck suitable for the audience.
+
+1. Open an event, choose **Start Family Cards**, and welcome at least two connected players. Drawing willingness has no effect on card participation. Each player receives ten private answer cards on their phone.
+2. Choose **Start a new round**. A random prompt appears on phones and the audience display, starting a 30-second submission period. Tapping an answer card submits it immediately and permanently for this round; there is no separate confirmation or answer-editing step.
+3. Only the first five distinct players' valid submissions received by the server become finalists. Submissions close immediately at five; otherwise they close at 30 seconds. Speed and connection latency affect qualification. The host can choose **Close submissions now**. Fewer than five answers still proceed; no answers skip the round without points.
+4. Finalists are shuffled and shown anonymously with stable answer numbers. Everyone registered can cast one final vote on their phone, including finalists, but nobody can vote for their own answer. Voting lasts 30 seconds; the host can choose **Close voting & show results** early. Voting does not close automatically when everyone has voted, and individual answer totals remain hidden until it closes.
+5. When voting closes, results reveal each finalist's Silly Name, vote count and earned points. Answers with positive votes earn 5/4/3/2/1 points by competition rank. Ties share a rank and skip occupied positions: votes 3/3/1 earn points 5/5/3. Answers with zero votes earn no points, including when no one votes. Scoring happens exactly once and updates both game and cumulative event points.
+6. Choose **Round results**, **Show scoreboard**, or **Start a new round**. The host can cancel an unscored round without awarding points. **Conclude game** retains registrations and cumulative event points in Variety Show, allowing the host to choose either game next. In standalone mode, it concludes the event.
+
+Hands stay private even in the host view. Only submitted cards are consumed and immediately replaced; other cards remain across rounds. Each hand contains ten distinct cards drawn independently from the 505-answer pack, allowing more than 50 players without running out. Different players can hold and submit the same answer text; such submissions remain separate numbered finalists with separate vote totals. Prompt cards do not repeat until all 95 have been used in the event, then recycle without an immediate repeat. Starting another card game deals fresh hands but retains the event's prompt history.
+
+Guests joining mid-round receive a hand and may vote immediately, but can submit only starting the next round. Reconnecting retains identity, hand, accepted submission and ballot. Keep the host screen private and project only `/display`.
+
+The source PDF describes home printing but does not explicitly grant digital redistribution rights. Closed-group/local operation is not a verified digital-use license. The operator is responsible for confirming appropriate permission before distributing or deploying this deck.
+
+#### Card assets and updates
+
+`lib/family-cards.json` contains the server-only text deck extracted from the supplied PDF. It is not served as a static download, and no external card API is called. Do not put the complete deck, player hands, or ballots into public state.
+
+To regenerate the asset from this exact 33-page PDF layout, install Python and `pypdf` in a local virtual environment, then run:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install pypdf
+.venv/bin/python scripts/import-family-cards.py
+npm test
+```
+
+Keep `.venv` outside source control. The importer checks the printed grid and expects 95 prompts and 505 answers; different PDF layouts require reviewing the importer, not silently accepting a partial deck. Review generated text and card boundaries before deployment. This tooling is for asset maintenance only; Render still uses the unchanged `npm ci` build and `npm start` command, with no Python installation needed.
+
+For local closed-group phone access, start the existing Node service and use the computer's LAN address in guest and display browsers. `localhost` on a phone refers to that phone, not the server. Keep access restricted to the intended network; do not port-forward the local service to the internet. Local snapshots remain in the configured `DATA_FILE`; production still requires the dedicated PostgreSQL backend described above.
+
 ### Names and word assets
 
 Family-friendly Silly Names are generated locally from the lists in `lib/engine.js` and made unique within the event. The compound-word pack is in `lib/words.js`: each entry is `[answer, firstPart, secondPart]`. No external name or word service is required. Words are not repeated until the entire pack has been used; a long event then starts another cycle without resetting scores or registrations and avoids immediately repeating the previous word. Review additions for all-ages English suitability, keep the answer equal to the two parts combined, and run `npm test` before deploying asset changes.
@@ -140,7 +174,7 @@ Family-friendly Silly Names are generated locally from the lists in `lib/engine.
 
 Do not deploy during a live event. The snapshot backend is single-instance, and a rolling deployment can run overlapping processes against the same snapshot. A restart can interrupt active play even though the saved snapshot is persistent. If an urgent update is unavoidable, end the event safely and wait until the service is no longer processing a round before deploying. After the deploy, check the service health before starting another event.
 
-On recovery, expired timers are processed instead of silently extended. If recovery finds an artist still in the 4-second selection slot, that artist receives a full 30-second drawing attempt. An expired nonblank drawing is frozen for private host review. An expired blank drawing follows the normal attempt rules: the same artist retries the same part with a fresh 30 seconds on the first failure; after a second failure, the artist is excluded for the game and a replacement is selected for that part when available. An expired guessing period closes guess input and waits for the host to choose **Reveal answer**. Confirm the recovered round state with the host and players before continuing.
+On recovery, expired timers are processed instead of silently extended. In Family Cards, expired submissions reveal the accepted finalists and begin a fresh 30-second voting period, or skip an empty round. Expired voting scores the saved ballots once and reveals results; hands and votes persist. In Big Draw, if recovery finds an artist still in the 4-second selection slot, that artist receives a full 30-second drawing attempt. An expired nonblank drawing is frozen for private host review. An expired blank drawing follows the normal attempt rules: the same artist retries the same part with a fresh 30 seconds on the first failure; after a second failure, the artist is excluded for the game and a replacement is selected for that part when available. An expired guessing period closes guess input and waits for the host to choose **Reveal answer**. Confirm the recovered round state with the host and players before continuing.
 
 ### Backups and restore
 
