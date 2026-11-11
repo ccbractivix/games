@@ -23,9 +23,11 @@ For local development, create `.env` from `.env.example`. Leave `DATABASE_URL` c
 
 ## Local screens
 
-After starting the service, use `/host` for private event controls, `/` for the guest joining and play screen, and `/display` for the sanitized projection screen. Sign in with the local `HOST_PASSWORD`, open a standalone or Variety Show event, then choose Big Draw (Pictionary) or Family Cards. Guest devices should open the same service address; localhost is only reachable on the computer running it.
+After starting the service, use `/host` for private event controls, `/` for the guest joining and play screen, and `/display` for the sanitized projection screen. Sign in with the local `HOST_PASSWORD`, open a standalone or Variety Show event, then choose Big Draw (Pictionary), Family Cards, or Get The Picture. Guest devices should open the same service address; localhost is only reachable on the computer running it.
 
 Family Cards gives each phone ten private answer cards. The first five submissions become anonymous finalists for a 30-second audience vote, with no self-voting. Positive-vote answers earn 5/4/3/2/1 points by rank, ties included; points also accumulate across Variety Show games. The host decides whether the supplied deck's humor suits the audience. See the manual's Family Cards section for operation, card maintenance and usage-permission considerations.
+
+Get The Picture supports 2-100 players in small-room, host-reviewed large-audience, and rotating-judge poolside formats. An image appears on phones and the Main Display, followed by 30 seconds to caption and 30 seconds to vote. The game includes six original starter illustrations; optional host uploads use a dedicated private Cloudflare R2 bucket. Captions are filtered server-side, with additional host blocking and removal controls. Automated filtering cannot guarantee suitability; use large-audience mode for human review before display. See the manual for game rules, moderation maintenance, and complete R2/Render setup.
 
 ## Production
 
@@ -47,5 +49,9 @@ No cloud resources have been created by this repository change. You do not need 
 | `DATABASE_SSL` | `true` uses `pg` TLS with certificate validation; use `false` for Render's private internal database connection. |
 | `DATA_FILE` | Development snapshot path; defaults to `.data/game.json`. |
 | `PUBLIC_BASE_URL` | Optional absolute HTTPS canonical URL for QR generation. If unset, the request host is used. |
+| `R2_ACCOUNT_ID` | Optional Cloudflare account ID; set all four R2 values to enable uploads. |
+| `R2_BUCKET_NAME` | Dedicated private games image bucket, using Standard storage. |
+| `R2_ACCESS_KEY_ID` | Bucket-scoped R2 S3 access key ID, stored only in the environment. |
+| `R2_SECRET_ACCESS_KEY` | Corresponding private R2 S3 secret access key. |
 
 Never put production credentials in `.env.example`, source control, or public event materials.

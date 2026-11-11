@@ -10,6 +10,8 @@ const { WebSocket } = require('ws');
 const { createApplication } = require('../server');
 const { Engine, freshState } = require('../lib/engine');
 const { createStore } = require('../lib/store');
+const sharp = require('sharp');
+const { createImageStorage, prepareImage } = require('../lib/image-storage');
 
 const ENV = { HOST_PASSWORD: 'test-only-host-password', SESSION_SECRET: 'test-only-session-secret-at-least-32-characters' };
 
@@ -314,4 +316,167 @@ test('60 connected phones complete a round with private previews and exactly 17 
   assert.equal(engine.state.players.reduce((sum, player) => sum + player.eventScore, 0), 17);
   assert.equal(engine.state.players.reduce((sum, player) => sum + player.gameScore, 0), 0);
   for (const phone of phones) phone.socket.terminate();
+});
+
+test('100 connected caption players complete poolside nominations and anonymous voting with persisted scores', { timeout: 30000 }, async t => {
+  const { engine, transact, post, base, snapshots } = await service(t, {
+    random: () => 0, timing: { submissions: 60000, judging: 60000, voting: 60000 },
+  });
+  const { cookie: hostCookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const host = (action, data = {}) => post('/api/command', { action, data }, hostCookie);
+  assert.equal((await host('new-event', { mode: 'variety' })).status, 200);
+  const phones = [];
+  for (let index = 0; index < 100; index++) {
+    const joined = await post('/api/join', { room: '1104', canDraw: false });
+    assert.equal(joined.status, 200);
+    const socket = new WebSocket(`${base.replace('http', 'ws')}/ws`, {
+      origin: base, headers: { Cookie: joined.cookie },
+    });
+    await once(socket, 'message');
+    phones.push({ socket, cookie: joined.cookie, id: joined.body.me.id });
+  }
+  assert.equal(engine.online().size, 100);
+  assert.equal((await host('start-game', { type: 'get-the-picture', pictureMode: 'poolside' })).status, 200);
+  assert.equal((await host('start-round')).status, 200);
+  const imageURL = engine.view().round.image.url;
+  assert.match((await fetch(`${base}${imageURL}`)).headers.get('content-type'), /svg/);
+  assert.equal((await host('start-caption-timer')).status, 200);
+  const rejected = await post('/api/command', {
+    action: 'submit-caption', data: { text: 'Florida is stupid' },
+  }, phones[0].cookie);
+  assert.equal(rejected.body.code, 'CAPTION_REJECTED');
+  assert.equal(engine.state.round.submissions.length, 0);
+  const submitted = await Promise.all(phones.map(phone => post('/api/command', {
+    action: 'submit-caption', data: { text: 'The duck requested another snack break.' },
+  }, phone.cookie)));
+  assert.ok(submitted.every(response => response.status === 200));
+  assert.equal(engine.state.round.submissions.length, 100);
+  const before = await (await fetch(`${base}/api/state?display=1`, { headers: { Cookie: hostCookie } })).json();
+  assert.deepEqual(before.round.finalists, []);
+  assert.equal(before.round.review, undefined);
+  assert.ok(!JSON.stringify(before).includes('requested another snack break'));
+  await transact(() => engine.tick(engine.state.round.deadline));
+  assert.equal(engine.state.round.stage, 'judging');
+  for (const group of engine.state.round.groups) {
+    const judge = phones.find(phone => phone.id === group.judgeId);
+    const state = await (await fetch(`${base}/api/state`, { headers: { Cookie: judge.cookie } })).json();
+    assert.equal(state.me.judgeChoices.length, 9);
+    assert.ok(!state.me.judgeChoices.some(entry => entry.id === state.me.ownSubmissionId));
+    const nominee = state.me.judgeChoices[0];
+    assert.equal((await post('/api/command', {
+      action: 'nominate-caption', data: { submissionId: nominee.id },
+    }, judge.cookie)).status, 200);
+  }
+  assert.equal(engine.state.round.stage, 'voting');
+  assert.equal(engine.view().round.finalists.length, 10);
+  assert.ok(engine.view().round.finalists.every(entry => Object.keys(entry).sort().join() === 'id,text'));
+  const [first, second] = engine.state.round.finalistIds.map(id => engine.state.round.submissions.find(entry => entry.id === id));
+  const votes = await Promise.all(phones.map(phone => post('/api/command', {
+    action: 'vote-caption', data: { submissionId: phone.id === first.playerId ? second.id : first.id },
+  }, phone.cookie)));
+  assert.ok(votes.every(response => response.status === 200));
+  assert.equal(engine.state.round.votes.length, 100);
+  await transact(() => engine.tick(engine.state.round.deadline));
+  assert.deepEqual(engine.state.round.results.slice(0, 2).map(entry => [entry.votes, entry.points]), [[99, 5], [1, 4]]);
+  assert.equal(snapshots.at(-1).awards.length, 2);
+  assert.equal(snapshots.at(-1).players.reduce((sum, player) => sum + player.eventScore, 0), 9);
+  assert.equal((await host('end-game', { allowTie: true })).status, 200);
+  assert.equal((await host('start-game', { type: 'family-cards' })).status, 200);
+  assert.equal(engine.state.players.reduce((sum, player) => sum + player.eventScore, 0), 9);
+  assert.ok(engine.state.players.every(player => player.gameScore === 0));
+  phones.forEach(phone => phone.socket.terminate());
+});
+
+test('host image uploads re-encode safely, stay private until selected and preserve metadata across events', async t => {
+  const uploaded = [];
+  const imageStorage = {
+    configured: true, imageOrigin: 'https://storage.example.test',
+    async upload(body) { uploaded.push(body); return 'get-the-picture/test.webp'; },
+    async url() { return 'https://storage.example.test/test.webp?temporary=signature'; },
+    async remove() {}, close() {},
+  };
+  const { engine, base, post } = await service(t, { imageStorage });
+  const { cookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const host = (action, data = {}) => post('/api/command', { action, data }, cookie);
+  const buffer = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: '#ffcc66' } })
+    .jpeg().toBuffer();
+  const upload = (body, auth = cookie, type = 'image/jpeg', permission = 'true') =>
+    fetch(`${base}/api/picture-images?${new URLSearchParams({
+      title: 'Test photo', alt: 'A golden rectangle', credit: 'Operator-owned test', permission,
+    })}`, { method: 'POST', headers: { Cookie: auth, Origin: base, 'Content-Type': type }, body });
+  assert.equal((await upload(buffer, '')).status, 401);
+  assert.equal((await upload(buffer, cookie, 'image/jpeg', 'false')).status, 400);
+  assert.equal((await upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), cookie, 'image/png')).status, 400);
+  assert.equal((await upload(Buffer.from('not an image'))).status, 400);
+  assert.equal((await upload(Buffer.alloc(5 * 1024 * 1024 + 1))).status, 400);
+  const result = await upload(buffer);
+  assert.equal(result.status, 200);
+  const state = await result.json();
+  assert.equal(state.pictureUploadsEnabled, true);
+  assert.equal(uploaded.length, 1);
+  const metadata = await sharp(uploaded[0]).metadata();
+  assert.equal(metadata.format, 'webp');
+  assert.equal(metadata.width, 1600);
+  assert.equal(metadata.height, 800);
+  assert.equal(metadata.exif, undefined);
+  const image = engine.state.pictureImages[0];
+  assert.equal(image.credit, 'Operator-owned test');
+  assert.equal(state.pictureImages.at(-1).key, undefined);
+  const file = `/api/picture-images/${image.id}/file`;
+  assert.equal((await fetch(`${base}${file}`, { redirect: 'manual' })).status, 404);
+  const preview = await fetch(`${base}${file}`, { headers: { Cookie: cookie }, redirect: 'manual' });
+  assert.equal(preview.status, 307);
+  assert.match(preview.headers.get('location'), /^https:\/\/storage\.example\.test\//);
+  assert.match(preview.headers.get('content-security-policy'), /img-src 'self' data: https:\/\/storage.example.test/);
+  await host('new-event', { mode: 'standalone' });
+  assert.equal(engine.state.pictureImages.length, 1);
+  const players = [engine.join({ room: '1104', canDraw: false }), engine.join({ room: '1104', canDraw: false })];
+  engine.online = () => new Set(players.map(player => player.id));
+  await host('start-game', { type: 'get-the-picture', pictureMode: 'large' });
+  await host('start-round', { imageId: image.id });
+  assert.equal((await fetch(`${base}${file}`, { redirect: 'manual' })).status, 307);
+  await host('set-picture-image', { imageId: image.id, enabled: false });
+  // Disabling future selection cannot break an image already in a live round.
+  assert.equal((await fetch(`${base}${file}`, { redirect: 'manual' })).status, 307);
+});
+
+test('R2 configuration is explicit, private viewing URLs are signed, and failed saves clean up uploads', async t => {
+  assert.equal(createImageStorage({}).configured, false);
+  assert.throws(() => createImageStorage({ R2_BUCKET_NAME: 'games' }), /requires all/);
+  const config = {
+    R2_ACCOUNT_ID: 'a'.repeat(32), R2_BUCKET_NAME: 'games-images',
+    R2_ACCESS_KEY_ID: 'test-access-key', R2_SECRET_ACCESS_KEY: 'test-only-storage-secret',
+  };
+  const storage = createImageStorage(config);
+  t.after(() => storage.close());
+  const url = new URL(await storage.url('get-the-picture/example.webp'));
+  assert.equal(url.origin, `https://${config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+  assert.ok(url.searchParams.get('X-Amz-Signature'));
+  assert.equal(url.searchParams.get('X-Amz-Expires'), '3600');
+  assert.ok(!url.href.includes(config.R2_SECRET_ACCESS_KEY));
+  await assert.rejects(prepareImage(Buffer.from('broken image')), /could not be decoded/);
+  const removed = [];
+  const imageStorage = {
+    configured: true, imageOrigin: null,
+    async upload() { return 'get-the-picture/orphan.webp'; },
+    async remove(key) { removed.push(key); }, close() {},
+  };
+  const store = {
+    state: freshState(),
+    async save() { throw new Error('Simulated image metadata outage'); },
+    async close() {},
+  };
+  const { base, post, engine } = await service(t, { imageStorage, store });
+  const { cookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const buffer = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#ffffff' } }).png().toBuffer();
+  const response = await fetch(`${base}/api/picture-images?title=Photo&alt=Square&credit=Operator&permission=true`, {
+    method: 'POST', headers: { Origin: base, Cookie: cookie, 'Content-Type': 'image/png' }, body: buffer,
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(removed, ['get-the-picture/orphan.webp']);
+  assert.equal(engine.state.pictureImages.length, 0);
+  const unavailable = await service(t);
+  const login = await unavailable.post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  assert.equal(login.body.pictureUploadsEnabled, false);
+  assert.equal((await unavailable.post('/api/picture-images', {}, login.cookie)).body.code, 'IMAGE_STORAGE_UNAVAILABLE');
 });

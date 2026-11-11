@@ -9,10 +9,17 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1166.0",
+    "@aws-sdk/s3-request-presigner": "^3.1166.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "naughty-words": "^1.2.0",
     "pg": "^8.13.3",
     "qrcode": "^1.5.4",
+    "sharp": "^0.35.5",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "yaml": "^2.9.1"
   }
 }
