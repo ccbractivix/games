@@ -21,6 +21,10 @@ npm test
 
 For local development, create `.env` from `.env.example`. Leave `DATABASE_URL` commented out to use the development snapshot in `.data/game.json`; uncomment it only if you intentionally use local PostgreSQL. Do not commit `.env` or `.data`.
 
+## Local screens
+
+After starting the service, use `/host` for private event controls, `/` for the guest joining and play screen, and `/display` for the sanitized projection screen. Sign in with the local `HOST_PASSWORD`, open a standalone or Variety Show event, then start Pictionary. Guest devices should open the same service address; localhost is only reachable on the computer running it.
+
 ## Production
 
 The recommended production setup is the Render Blueprint in `render.yaml`: one Node web service and one dedicated PostgreSQL database. It provisions the service from this GitHub repository and uses Render's private database connection. See [docs/GAMES_MANUAL.md](docs/GAMES_MANUAL.md) for the complete setup, event operation, recovery, and maintenance instructions.
