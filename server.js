@@ -54,6 +54,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
     if (auth.role === 'host') {
       result.pictureUploadsEnabled = imageStorage.configured;
       result.screengrabberUploadsEnabled = imageStorage.configured;
+      result.lineupUploadsEnabled = imageStorage.configured;
     }
     return result;
   }
@@ -221,12 +222,15 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
   for (const library of [
     { route: 'picture-images', game: 'get-the-picture', images: () => imageLibrary(engine.state), stateKey: 'pictureImages' },
     { route: 'screengrabber-images', game: 'screengrabbers', images: () => engine.state.screengrabberImages, stateKey: 'screengrabberImages' },
+    { route: 'lineup-images', game: 'lineup', images: () => engine.state.lineupImages, stateKey: 'lineupImages' },
   ]) {
     app.get(`/api/${library.route}/:id/file`, route(async (request, response) => {
       await queue;
       const auth = identity(request);
       const image = library.images().find(item => item.id === request.params.id);
-      if (!image || (auth.role !== 'host' && (engine.state.game?.type !== library.game || engine.state.round?.image?.id !== image.id))) {
+      const inRound = library.game === 'lineup' ?
+        engine.state.round?.images?.some(item => item.id === image?.id) : engine.state.round?.image?.id === image?.id;
+      if (!image || (auth.role !== 'host' && (engine.state.game?.type !== library.game || !inRound))) {
         throw new GameError('That image is not available in the current round.', 404, 'IMAGE_UNAVAILABLE');
       }
       if (image.kind === 'starter') {

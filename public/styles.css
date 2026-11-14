@@ -14,6 +14,47 @@
   background: #f8f6ff;
   color: var(--ink);
 }
+body.lineup { --purple: #c21653; --purple-dark: #92103f; --ink: #211b22; --muted: #62545d; --line: #e2d5da; background: #f0e9df; }
+body.lineup .brand-name { font-family: Georgia, serif; text-transform: uppercase; letter-spacing: -.06em; }
+body.lineup .card { border-radius: 3px; }
+.lineup-magazine, body.lineup .lineup-magazine { color: #211b22; background: #fffdf6; border: 2px solid #211b22; border-radius: 0; }
+.lineup-masthead { display: block; font-family: Georgia, "Times New Roman", serif; font-size: clamp(2.6rem, 8vw, 6rem); font-weight: 900; line-height: 1; letter-spacing: -.08em; color: #c21653; margin-bottom: 16px; }
+.lineup-magazine > .eyebrow { border-top: 3px solid #211b22; border-bottom: 1px solid #211b22; padding: 10px 0; color: #211b22; }
+.lineup-headline { font-family: Georgia, "Times New Roman", serif; font-size: clamp(1.6rem, 3.8vw, 3.3rem); line-height: 1.12; overflow-wrap: anywhere; }
+.lineup-collage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 20px 0; }
+.lineup-collage[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lineup-panel { min-width: 0; position: relative; }
+.lineup-photo { display: grid; place-items: center; width: 100%; aspect-ratio: 3 / 4; padding: 0; overflow: hidden; border: 4px solid #211b22; border-radius: 0; background: #e9e1d7; color: #211b22; }
+.lineup-photo img { display: block; width: 100%; height: 100%; min-height: 0; object-fit: cover; }
+button.lineup-photo:hover:not(:disabled) { background: #e9e1d7; border-color: #c21653; transform: none; }
+button.lineup-photo:disabled { opacity: 1; }
+.lineup-selected { border-color: #c21653; box-shadow: inset 0 0 0 3px #c21653; }
+.lineup-correct { border-color: #126044; }
+.lineup-stamp { position: absolute; top: 8px; left: 8px; right: 8px; width: fit-content; padding: 5px 8px; background: #c21653; color: white; font-size: .75rem; font-weight: 900; pointer-events: none; }
+.lineup-answer { top: auto; bottom: 8px; background: #126044; }
+.lineup-panel:has(.lineup-enlarge) .lineup-answer { bottom: 56px; }
+.lineup-concealed .lineup-photo img { visibility: hidden; }
+.lineup-concealed .lineup-photo { background: repeating-linear-gradient(45deg, #e9e1d7, #e9e1d7 10px, #f8f2e8 10px, #f8f2e8 20px); }
+.lineup-enlarge { width: 100%; margin-top: 5px; font-size: .75rem; padding: 8px 3px; }
+.lineup-story { border-left: 5px solid #c21653; padding: 16px 20px; margin: 20px 0; background: #f7e8ee; }
+.lineup-story p { white-space: pre-wrap; }
+.lineup-panel-editor { min-width: 0; border: 1px solid #e2d5da; }
+.lineup-editor-preview, .lineup-mobile-preview { padding: 16px; margin: 20px 0; }
+.lineup-mobile-preview { width: 360px; max-width: 100%; }
+.lineup-mobile-preview .lineup-headline { font-size: 1.6rem; }
+.lineup-mobile-preview .lineup-masthead { font-size: 2.6rem; }
+#lineup-library summary { cursor: pointer; min-height: 44px; }
+#lineup-question-form > .actions { margin: 16px 0; }
+.lineup-photo-dialog { width: min(94vw, 900px); max-height: 94vh; padding: 20px; }
+.lineup-photo-dialog img { display: block; width: 100%; max-height: 60vh; object-fit: contain; margin-bottom: 16px; }
+body[data-page=display].lineup .lineup-collage { max-width: min(100%, 66vh); margin-left: auto; margin-right: auto; }
+body[data-page=display].lineup .lineup-collage[data-count="3"] { max-width: min(100%, 100vh); }
+body[data-page=display].lineup .lineup-collage[data-count="4"] { max-width: min(100%, 36vh); }
+body[data-page=display].lineup:has(.lineup-collage) .hero { display: none; }
+body[data-page=display].lineup .lineup-masthead { font-size: clamp(2.6rem, 5vw, 4rem); }
+body[data-page=display].lineup .lineup-headline { font-size: clamp(1.6rem, 3vw, 2.4rem); }
+body[data-page=display].lineup .lineup-spread:has(.lineup-story) { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 24px; align-items: center; }
+body[data-page=player].lineup:has(.lineup-collage) .hero { display: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 8% 10%, #f0eaff 0, transparent 45%), radial-gradient(ellipse at 98% 70%, #fff1dd 0, transparent 38%), #f8f6ff; }
 button, input, select, textarea { font: inherit; }

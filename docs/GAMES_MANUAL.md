@@ -7,7 +7,7 @@ This manual covers the standalone Resort Games service. It is not part of RGP an
 - **Render web service:** Serves the guest application, `/host`, `/display`, WebSocket connections, and the QR endpoint (`GET /api/qr`).
 - **Render PostgreSQL:** Stores the current event snapshot and persistent game libraries as one JSONB row. The application creates its schema automatically, including Screengrabbers question storage; operators do not need to create tables or write SQL.
 - **GitHub:** Holds the source and `render.yaml` deployment blueprint.
-- **Cloudflare R2 (optional):** Holds uploaded Get The Picture and Screengrabbers images in a dedicated private games bucket. Each game has its own object prefix and host library. Render uploads optimized images; phones and the display read them through temporary signed links. Questions, correct answers, captions, scores and image metadata stay in the database, not public bucket listings.
+- **Cloudflare R2 (optional):** Holds uploaded Get The Picture, Screengrabbers and Lineup images in a dedicated private games bucket. Each game has its own object prefix and host library. Render uploads optimized images; phones and the display read them through temporary signed links. Questions, correct answers, captions, scores and image metadata stay in the database, not public bucket listings.
 - **Local development:** Uses a JSON snapshot file instead of PostgreSQL by default.
 
 The package is `resort-games` and requires Node.js 22 or newer. The deployed service listens on Render's `PORT` (default `3000` locally), and exposes `/health` for health checks.
@@ -85,18 +85,18 @@ Domain registration, purchase, and Vercel are not required.
 
 ## Games image storage: Cloudflare R2
 
-The six Get The Picture starter illustrations work without Cloudflare. Screengrabbers requires host-uploaded images and has no bundled movie assets. To enable host uploads, configure R2 separately; the Render Blueprint does not create a Cloudflare account, bucket, or credentials. Keep this infrastructure dedicated to games. Do not move an existing resort domain or attach another resort's bucket. An R2 account is a storage service, not a replacement for Render or PostgreSQL.
+The six Get The Picture starter illustrations work without Cloudflare. Screengrabbers and Lineup require host-uploaded images and have no bundled movie or celebrity assets. To enable host uploads, configure R2 separately; the Render Blueprint does not create a Cloudflare account, bucket, or credentials. Keep this infrastructure dedicated to games. Do not move an existing resort domain or attach another resort's bucket. An R2 account is a storage service, not a replacement for Render or PostgreSQL.
 
-Use **one private games bucket**, not one bucket per game. Get The Picture uses `get-the-picture/<random-id>.webp`; Screengrabbers uses `screengrabbers/<random-id>.webp`. These prefixes act like folders. Host albums and database references also stay separate, so neither game's random selection draws from the other's library. Prefixes are not security boundaries: the games server's bucket-scoped credential can access both. Only use separate buckets if independent credentials, jurisdiction, or retention policies require true isolation; that would need additional application configuration. Future image games should follow the same game-specific prefix/library pattern.
+Use **one private games bucket**, not one bucket per game. Get The Picture uses `get-the-picture/<random-id>.webp`; Screengrabbers uses `screengrabbers/<random-id>.webp`; Lineup uses `lineup/<random-id>.webp`. These prefixes act like folders. Host albums and database references also stay separate, so each game's random selection draws only from its own library. Prefixes are not security boundaries: the games server's bucket-scoped credential can access all three. Only use separate buckets if independent credentials, jurisdiction, or retention policies require true isolation; that would need additional application configuration. Future image games should follow the same game-specific prefix/library pattern.
 
-**If games R2 is already configured:** keep the same bucket and all four existing Render R2 variables. Deploy this release manually on the existing games service outside event hours. No new Cloudflare token, bucket, Render database, Vercel project, public access, CORS rule, or DNS change is needed. The application creates prefixes when it uploads the first image; do not manually create folders. Then follow the Screengrabbers library steps below.
+**If games R2 is already configured:** keep the same bucket and all four existing Render R2 variables. Deploy this release manually on the existing games service outside event hours. No new Cloudflare token, bucket, Render database, Vercel project, public access, CORS rule, or DNS change is needed. The application creates prefixes when it uploads the first image; do not manually create folders. Then follow the Screengrabbers or Lineup library steps below.
 
 ### Create the private games bucket
 
 1. Create/sign in to your Cloudflare account and enable two-factor authentication. Open **R2 Object Storage** and enable R2. Cloudflare may require billing information even when usage is within its free allowance. Review the current R2 pricing and billing terms before accepting. A paid Cloudflare website plan is not needed.
 2. In R2, choose **Create bucket**, with a dedicated name such as `resort-games-images-prod`. Choose **Standard** storage, not Infrequent Access. Use an appropriate location/jurisdiction for the resort's requirements; the default automatic location is acceptable when there are no additional requirements.
 3. Keep the bucket **private**: do not enable the Public Development URL (`r2.dev`), connect a custom domain, or enable public access. No domain purchase or DNS changes are required.
-4. Do not add lifecycle rules deleting the `get-the-picture/` or `screengrabbers/` prefixes. These are permanent library assets, not temporary uploads.
+4. Do not add lifecycle rules deleting the `get-the-picture/`, `screengrabbers/` or `lineup/` prefixes. These are permanent library assets, not temporary uploads.
 5. In R2's API-token management, create an R2 S3-compatible credential with **Object Read & Write** permissions restricted to **this bucket only**. Depending on the dashboard, this is labeled **Manage R2 API Tokens** or an account/user R2 token option. Do not create a global Cloudflare API key, account-admin token, or credentials for all resort buckets.
 6. Copy the displayed **Access Key ID**, **Secret Access Key**, and account ID into a private password manager. The S3 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; the app constructs it from the account ID. Use the S3 access-key pair, not the Cloudflare bearer-token string. The secret may only be shown once. Never send these values through chat, GitHub, screenshots, or event materials.
 
@@ -113,7 +113,7 @@ Use **one private games bucket**, not one bucket per game. Get The Picture uses 
    | `R2_SECRET_ACCESS_KEY` | Its corresponding secret access key. |
 
 3. Save and deploy the reviewed games release from Render's **Manual Deploy** menu. Automatic deploy remains disabled and the service remains single-instance. Supplying only some R2 variables is a startup error; leave all four unset/blank if using only starter images.
-4. Check `/health`. Sign in to `/host`, expand **Get The Picture - Image library & safety** or **Screengrabbers - Image album & questions**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
+4. Check `/health`. Sign in to `/host`, expand **Get The Picture - Image library & safety**, **Screengrabbers - Image album & questions** or **Lineup - Face album & headline library**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
 5. Upload a small test image you own. Enter its title, accessibility description, and credit/source, and confirm permission to use it. A successful upload checks write access. Open its library preview to check read access.
 6. Choose Get The Picture, start a test round with that image, and check it on an independent phone and `/display` over the real HTTPS site. Confirm it finishes loading before starting the timer. This is the end-to-end Cloudflare verification; local tests with simulated storage do not verify a real account.
 
@@ -151,7 +151,7 @@ Use a laptop connected to the TV/projector by HDMI for the most predictable disp
 The game runs on Render, not on the laptop: the laptop needs only a modern browser. Guests can use resort Wi-Fi or mobile data; they do not need the same local network. Complete any Wi-Fi sign-in page before joining. Artists should keep their phone screen open during their drawing attempt. For local phone testing only, use the laptop's LAN address instead of `localhost`; do not expose the development server to the public internet.
 
 1. Open `/host` and sign in with `HOST_PASSWORD`.
-2. Create an event and choose its title and format: standalone (one game) or Variety Show. The event opens guest registration, up to 100 registered players for every game and format. Disconnected players still occupy their registration; their existing device can rejoin at capacity. Choose **Start Big Draw**, **Start Family Cards**, **Start Screengrabbers**, or a Get The Picture format from the host controls.
+2. Create an event and choose its title and format: standalone (one game) or Variety Show. The event opens guest registration, up to 100 registered players for every game and format. Disconnected players still occupy their registration; their existing device can rejoin at capacity. Choose **Start Big Draw**, **Start Family Cards**, **Start Screengrabbers**, **Start Lineup**, or a Get The Picture format from the host controls.
 3. Give guests the QR code or site URL. Guests choose a building, room, and (where offered) unit using the room picker, choose whether they are willing to draw, and join. The game assigns a silly player name. There is no typed room-code flow.
 4. Open `/display?display=1` on the projection device. Keep host controls private. This public display view stays sanitized even if opened in a browser that also has a host login.
 5. Start Pictionary from the host view, then start a new round. The host does not choose the prompt; the game randomly selects a secret word and its two parts.
@@ -242,6 +242,42 @@ Screengrabbers is an "at the movies" image quiz with a cinema marquee, red curta
 Back up the database snapshot and matching private R2 objects together; database backups do not contain image bytes. Keep original images and the permissions/source information. Ordinary host controls disable content rather than delete it.
 
 For permanent retirement or the 200-image/1,000-question limit, an operator must back up and stop the games service, remove the exact retired entries from `screengrabberQuestions`, remove retired image references from `screengrabberImages`, and delete only those images' exact `key` objects from R2. Remove all questions referencing an image before removing that image. Do not retire an image or question referenced by the saved current round; retain it until a different round is selected. Restart and verify both albums and guest image viewing afterward. Do not delete the bucket or the other game's prefix. This is administrative maintenance, not a host game control.
+
+### Lineup
+
+Lineup is a celebrity-headline quiz styled as a gossip magazine. It supports 2-100 connected players, standalone or in a Variety Show, with the same scoring and host-controlled reveal as Screengrabbers. Players tap photo panels rather than numbered answer buttons.
+
+#### Deployment and storage
+
+1. Use the existing dedicated games Render service, PostgreSQL database and private games R2 bucket. If uploads are not configured, complete **Optional private image uploads (Cloudflare R2 + Render)** above. Lineup requires uploads; it includes no celebrity assets.
+2. With games R2 already configured, keep all four existing R2 variables and credentials unchanged. No new Render variables, database tables to create manually, Cloudflare bucket/token, CORS rule, DNS change or Vercel configuration is required. Uploads create the `lineup/` prefix automatically.
+3. Back up the database snapshot and matching R2 objects. Manually deploy the release on the existing games service outside event hours; keep one instance and autoscaling disabled. Check `/health`, sign in to `/host`, and verify **Lineup - Face album & headline library** and **Start Lineup** appear.
+4. Upload two test photos and save a headline. Confirm that both photos load on a phone and `/display`, then complete a test round through reveal. An enabled upload form alone does not verify R2 credentials. Do not reuse other resort infrastructure.
+
+#### Build the face album and headline library
+
+1. Expand **Lineup - Face album & headline library**. Upload individual face photos, not a finished collage. Each upload accepts a still JPEG, PNG or WebP up to 5 MB and 20 megapixels and requires a private title, spoiler-free accessibility description, source/credit, and permission/suitability confirmation. Review display rights and audience suitability yourself. Images are optimized to WebP; keep your originals.
+2. Once at least two photos exist, enter a headline/caption of up to 240 characters. Choose 2-4 different album images in reading order. Use **Add face** or **Remove last face** to change the panel count.
+3. The collage uses two photos side by side, three across, or four in a 2-by-2 grid. Every photo has the same 3:4 frame on every screen. Adjust horizontal and vertical focal sliders to reposition the image inside that frame; cropping is visual, not destructive. There is no automatic face detection. Use clear, tightly framed photos, particularly for a three-photo row on phones.
+4. Review the full and **Mobile-sized preview**, then click the correct face in either preview. The selected correct panel is outlined and marked in the private editor. Panels are not shuffled. There are no visible answer numbers during play; neutral photo labels support keyboards and screen readers.
+5. Optionally enter a celebrity name (120 characters maximum) and reveal explanation (600 characters maximum). Save the headline. Private image titles are never sent to players; credits, correct answers, reveal names and explanations are hidden until reveal. Accessibility descriptions are visible while answering, so never put celebrity names or answer clues in them.
+6. Edit saved headlines or disable individual headlines/photos. Disabling any photo excludes every headline using it. Edits and disabling affect future selections only: a live round keeps a snapshot of the headline, framing, answer, reveal details and image metadata. Up to 200 photos and 1,000 headlines are supported. Libraries and enabled settings survive **New event**.
+
+#### Run Lineup
+
+1. Open a standalone or Variety Show event, welcome at least two connected players, then choose **Start Lineup** and **Start a new round**. Headlines are chosen randomly without repeats until all eligible headlines are exhausted; a new cycle avoids immediately repeating the last headline when alternatives exist. Different headlines can reuse photos.
+2. The host sees a private preview and correct answer. Guests preload all photos behind concealed panels; the headline stays hidden. Check the count of players who have loaded **every** photo and check the Main Display. If loading fails, use **Retry photos** and check connectivity, R2 settings and Render logs. The host's publish button stays disabled until all host-preview photos load.
+3. Choose **Publish headline & start 30 seconds**. Players tap a face to select it, can change their selection, then press **Lock in** to submit. Selection alone earns no place in the speed ranking. The first accepted Lock in is final, even if wrong. Speed is ranked by server receipt of Lock in, never by the initial tap or device clock.
+4. **Enlarge photo** opens a full-image preview without selecting or submitting. The countdown continues while the preview is open. Close it to return to the collage. The layout, panel order and focal framing stay consistent on phones, the display and the host preview.
+5. Close answers early if desired; otherwise the server closes at the deadline. The host then chooses **Reveal answer & award points**. The correct photo is highlighted, optional reveal details and credits appear, and points are awarded exactly once. First five correct answers earn 6/5/4/3/2 total points; every later correct answer earns 1. Wrong/missing answers earn zero and do not consume speed places. Equal timestamps retain server receipt order; venue latency can affect ranking.
+6. Use **Round results**, **Show scoreboard**, **Start a new round**, or **Conclude game**. Cancelled unscored rounds award nothing. Guests joining after selection wait until the next round. Reconnecting participants retain locked answers; an unconfirmed selection is local to the page and may be lost on refresh.
+7. Restart recovery preserves the original deadline, accepted answers and question snapshot. An expired answering window closes after restart; the host must still reveal to award points. Variety Show games preserve Silly Names and cumulative event points when the host chooses another game; a standalone conclusion ends the event.
+
+#### Backup and retirement
+
+Back up the database snapshot and matching `lineup/` R2 objects together; database backups do not contain photo bytes. Keep original photos and permission/source information. Host controls disable rather than delete content.
+
+For permanent retirement or capacity maintenance, back up and stop the service. Remove the exact retired headlines from `lineupQuestions` before removing any referenced photos from `lineupImages`, then delete only those photos' exact `key` objects from R2. Never remove photos or headlines referenced by the saved current round; wait until a different round is selected. Restart and check Lineup plus the other image games. Never delete the bucket or another game's prefix.
 
 ## Get The Picture
 
