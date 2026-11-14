@@ -480,3 +480,86 @@ test('R2 configuration is explicit, private viewing URLs are signed, and failed 
   assert.equal(login.body.pictureUploadsEnabled, false);
   assert.equal((await unavailable.post('/api/picture-images', {}, login.cookie)).body.code, 'IMAGE_STORAGE_UNAVAILABLE');
 });
+
+test('Screengrabbers album uploads are isolated and 100 phones receive private answers and persisted speed scores', { timeout: 30000 }, async t => {
+  const uploaded = [];
+  const imageStorage = {
+    configured: true, imageOrigin: 'https://storage.example.test',
+    async upload(body, game) { uploaded.push({ body, game }); return `${game}/test.webp`; },
+    async url(key) { return `https://storage.example.test/${key}?signed=yes`; },
+    async remove() {}, close() {},
+  };
+  const { engine, base, post, snapshots, transact } = await service(t, {
+    imageStorage, timing: { screengrabbers: 60000 },
+  });
+  const { cookie: hostCookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const host = (action, data = {}) => post('/api/command', { action, data }, hostCookie);
+  const image = await sharp({ create: { width: 12, height: 8, channels: 3, background: '#ffffff' } }).png().toBuffer();
+  const upload = cookie => fetch(`${base}/api/screengrabber-images?title=Private+movie+title&alt=A+doorway&credit=Private+source&permission=true`, {
+    method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'image/png' }, body: image,
+  });
+  assert.equal((await upload('')).status, 401);
+  const result = await upload(hostCookie);
+  assert.equal(result.status, 200);
+  const library = await result.json();
+  assert.equal(library.screengrabberUploadsEnabled, true);
+  assert.equal(uploaded[0].game, 'screengrabbers');
+  assert.equal((await sharp(uploaded[0].body).metadata()).format, 'webp');
+  assert.equal(engine.state.pictureImages.length, 0);
+  assert.equal(engine.state.screengrabberImages.length, 1);
+  const imageId = engine.state.screengrabberImages[0].id;
+  const fileURL = `${base}/api/screengrabber-images/${imageId}/file`;
+  assert.equal((await fetch(fileURL, { redirect: 'manual' })).status, 404);
+  assert.equal((await fetch(fileURL, { headers: { Cookie: hostCookie }, redirect: 'manual' })).status, 307);
+  const question = { imageId, prompt: 'Which film?', options: ['Film A', 'Film B'], correctChoice: 1 };
+  assert.equal((await post('/api/command', { action: 'save-screengrabber-question', data: question })).status, 400);
+  assert.equal((await host('save-screengrabber-question', question)).status, 200);
+  await host('new-event', { mode: 'variety' });
+  assert.equal(engine.state.screengrabberQuestions.length, 1);
+  const phones = [];
+  for (let index = 0; index < 100; index++) {
+    const joined = await post('/api/join', { room: '1104', canDraw: false });
+    assert.equal(joined.status, 200);
+    const socket = new WebSocket(`${base.replace('http', 'ws')}/ws`, { origin: base, headers: { Cookie: joined.cookie } });
+    await once(socket, 'message');
+    phones.push({ socket, cookie: joined.cookie, id: joined.body.me.id });
+  }
+  assert.equal((await post('/api/join', { room: '1104', canDraw: false })).status, 400);
+  assert.equal((await host('start-game', { type: 'screengrabbers' })).status, 200);
+  assert.equal((await host('start-round')).status, 200);
+  assert.equal((await fetch(fileURL, { redirect: 'manual' })).status, 307);
+  const publicSocket = new WebSocket(`${base.replace('http', 'ws')}/ws?display=1`, { origin: base, headers: { Cookie: hostCookie } });
+  const [raw] = await once(publicSocket, 'message');
+  const display = JSON.parse(raw).state;
+  assert.equal(display.role, 'display');
+  assert.equal(display.round.correctChoice, null);
+  assert.deepEqual(display.round.options, []);
+  assert.equal(display.screengrabberQuestions, undefined);
+  await host('start-screengrabber-timer');
+  const roundId = engine.state.round.id;
+  const submitted = await Promise.all(phones.map(phone => post('/api/command', {
+    action: 'submit-screengrabber-answer', data: { roundId, choice: 1 },
+  }, phone.cookie)));
+  assert.ok(submitted.every(response => response.status === 200));
+  assert.ok(submitted.every(response => response.body.me.submitted && response.body.me.correct === null));
+  assert.equal(engine.state.round.submissions.length, 100);
+  assert.equal((await post('/api/command', {
+    action: 'submit-screengrabber-answer', data: { roundId, choice: 0 },
+  }, phones[0].cookie)).status, 400);
+  const publicState = await (await fetch(`${base}/api/state?display=1`)).json();
+  assert.equal(publicState.round.correctChoice, null);
+  assert.ok(!JSON.stringify(publicState).includes('Private source'));
+  await transact(() => engine.tick(engine.state.round.deadline));
+  assert.equal((await host('reveal')).status, 200);
+  const receiptOrder = engine.state.round.submissions.map(entry => entry.playerId);
+  assert.deepEqual(receiptOrder.slice(0, 7).map(id => engine.player(id).gameScore), [6, 5, 4, 3, 2, 1, 1]);
+  assert.equal(snapshots.at(-1).awards.length, 100);
+  assert.equal(snapshots.at(-1).players.reduce((sum, player) => sum + player.eventScore, 0), 115);
+  await host('end-game', { allowTie: true });
+  await host('start-game', { type: 'pictionary' });
+  assert.equal((await fetch(fileURL, { redirect: 'manual' })).status, 404);
+  assert.equal(engine.state.players.reduce((sum, player) => sum + player.eventScore, 0), 115);
+  assert.ok(engine.state.players.every(player => player.gameScore === 0));
+  phones.forEach(phone => phone.socket.terminate());
+  publicSocket.terminate();
+});
