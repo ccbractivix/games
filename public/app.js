@@ -16,6 +16,7 @@
   let noticeTimer = null;
   let busy = false;
   let signature = '';
+  let renderedRound = { id: null, stage: null };
   let picker = null;
   let draft = null;
   let optimistic = [];
@@ -31,12 +32,16 @@
   const readyReports = new Set();
   const loadedPictures = new Set();
   const uploadDraft = { file: null, title: '', alt: '', credit: '', permission: false };
+  const screengrabberUploadDraft = { file: null, title: '', alt: '', credit: '', permission: false };
+  let screengrabberLibraryOpen = false;
+  let questionDraft = { questionId: '', imageId: '', prompt: '', options: ['', '', '', ''], correctChoice: '' };
   const requests = new Map();
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const isHost = () => page === 'host' && state?.role === 'host';
   const isCards = () => state?.game?.type === 'family-cards';
   const isPicture = () => state?.game?.type === 'get-the-picture';
-  const gameTitle = () => isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'Pictionary';
+  const isScreengrabbers = () => state?.game?.type === 'screengrabbers';
+  const gameTitle = () => isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'Pictionary';
   const connected = () => socket?.readyState === WebSocket.OPEN;
   const shown = () => publicStages.has(state?.round?.stage);
   const timeLeft = deadline => Math.max(0, Math.ceil((deadline - (Date.now() + offset)) / 1000));
@@ -163,9 +168,10 @@
     if (isHost() && pictureImageChoice && !state.pictureImages.some(image => image.id === pictureImageChoice && image.enabled)) {
       pictureImageChoice = '';
     }
-    const title = isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
+    const title = isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
     document.querySelector('.brand-name').textContent = title;
-    document.querySelector('.brand-icon').textContent = isPicture() ? '▣' : isCards() ? '5' : '✎';
+    document.querySelector('.brand-icon').textContent = isScreengrabbers() ? '▶' : isPicture() ? '▣' : isCards() ? '5' : '✎';
+    document.body.classList.toggle('screengrabbers', isScreengrabbers());
     document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${title}`;
     offset = next.serverTime - Date.now();
     if (previous?.round?.id !== next.round?.id || previous?.me?.artistSlot !== next.me?.artistSlot) {
@@ -207,8 +213,17 @@
     if (page === 'host') app.innerHTML = isHost() ? hostView() : loginView();
     else if (page === 'player') app.innerHTML = state.me ? playerView() : joinView();
     else app.innerHTML = displayView();
+    if (isScreengrabbers() && state.round?.stage === 'answering' &&
+      renderedRound.id === state.round.id && renderedRound.stage === 'loading') {
+      app.querySelector('.cinema-screen')?.classList.add('cinema-opening');
+    }
+    renderedRound = { id: state.round?.id, stage: state.round?.stage };
     if (previousPicture?.dataset.pictureImage === state.round?.id) {
-      app.querySelector('[data-picture-image]')?.replaceWith(previousPicture);
+      const nextPicture = app.querySelector('[data-picture-image]');
+      if (nextPicture) {
+        previousPicture.alt = nextPicture.alt;
+        nextPicture.replaceWith(previousPicture);
+      }
     }
     document.body.classList.toggle('event-ended', state.event?.status === 'ended');
     document.body.dataset.roundStage = state.round?.stage || '';
@@ -220,7 +235,7 @@
     if (savedField) {
       const field = document.getElementById(savedField.id);
       if (field) {
-        field.value = savedField.value;
+        if (!savedField.id.startsWith('screengrabber-') && !savedField.id.startsWith('image-')) field.value = savedField.value;
         field.focus({ preventScroll: true });
         if (savedField.start !== null && field.setSelectionRange && field.type !== 'number') field.setSelectionRange(savedField.start, savedField.end);
       }
@@ -235,6 +250,13 @@
   }
 
   function joinView() {
+    if (isScreengrabbers()) return `${heading('Your ticket to movie night.', 'Spot the image. Pick your answer. Be quick for bonus points!', state.event?.title || 'Screengrabbers')}
+      <section class="card loading"><span class="eyebrow">Now admitting · Maximum 100 players</span><h2>Join Screengrabbers</h2>
+      <form id="join-form"><div id="room-picker"></div>
+      <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not your movie-night answers.</span></label>
+      <button class="full" id="join-submit"${disabled(!state.joinOpen)}>Take your seat</button>
+      <p id="join-status" class="small-text">${state.joinOpen ? 'Your silly name is waiting for you.' : 'Joining is paused.'}</p></form>
+      <p>30 seconds. One final answer. Every correct answer earns 1 point; the first five earn 6/5/4/3/2 total. Join mid-round and play the next question.</p></section>`;
     if (isPicture()) return `${heading('One picture. Your funniest caption.', 'You get 30 seconds to bring the laughs, then the audience votes.', state.event?.title || 'Get The Picture')}
       <section class="card loading"><h2>Join Get The Picture</h2><form id="join-form"><div id="room-picker"></div>
       <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not captions or judging.</span></label>
@@ -338,6 +360,7 @@
     if (state.event?.status === 'ended' || state.display === 'event-final') return identity() + finale();
     if (state.display === 'game-final') return identity() + gameFinal();
     if (state.display === 'scoreboard') return identity() + intro + `<div class="grid split">${leaderboard('game', 'This game')}${leaderboard('event', 'The whole show')}</div>`;
+    if (isScreengrabbers()) return identity() + intro + screengrabberRoundView() + leaderboard('game', 'Box office leaders');
     if (isPicture()) return identity() + intro + pictureRoundView() + leaderboard('game', 'The score so far');
     if (isCards()) return identity() + intro + cardRoundView() + leaderboard('game', 'The score so far');
     if (state.display === 'round-results') return identity() + intro + answerView() + leaderboard('round', 'This round’s stars', 5) + leaderboard('game', 'Game leaderboard');
@@ -361,6 +384,7 @@
     if (state.display === 'game-final') return gameFinal();
     const intro = heading(state.event?.title || 'The Big Draw', state.game ? `${gameTitle()} · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'A room full of people. A world of imagination.', 'Play together');
     if (state.display === 'scoreboard') return intro + `<div class="grid split">${leaderboard('game', `${gameTitle()} leaderboard`)}${leaderboard('event', 'Variety Show leaderboard')}</div>`;
+    if (isScreengrabbers()) return intro + screengrabberRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isPicture()) return intro + pictureRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isCards()) return intro + cardRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (state.display === 'round-results') return intro + answerView() + `<div class="grid split">${leaderboard('round', 'This round’s stars')}${leaderboard('game', 'Game leaderboard')}</div>`;
@@ -403,6 +427,94 @@
       <p role="status">${escape(status)}</p>${me?.votedFor && voting ? '<p class="success">Your vote is recorded. Results appear when voting closes.</p>' : ''}${answers}
       ${isHost() && round ? `<div class="actions host-actions">${button('close-submissions', 'Close submissions now', !submitting)}${button('close-voting', 'Close voting & show results', !voting)}${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}${button('cancel-round', 'Cancel round…', !submitting && !voting, 'danger')}</div>` : ''}
       <p class="small-text">30 seconds to submit, closing early at five answers; then 30 seconds to vote. One vote each. Ranked points: 5/4/3/2/1; ties share their rank and skip the next position. Answers without votes earn no points.</p></section>${hand}${revealed ? leaderboard('round', 'This round’s stars') : ''}`;
+  }
+
+  function screengrabberRoundView() {
+    const round = state.round;
+    const me = page === 'player' ? state.me : null;
+    if (!round) return `<section class="card cinema-marquee waiting"><span class="eyebrow">Now showing</span><h2>Screengrabbers</h2><p>Take your seat. The host will roll the first image shortly.</p><p class="small-text">One answer per question. Every correct answer earns a point; the first five earn speed bonuses.</p></section>`;
+    const loading = round.stage === 'loading';
+    const answering = round.stage === 'answering';
+    const revealed = ['revealed', 'results'].includes(round.stage);
+    const concealed = loading && !isHost();
+    const statuses = {
+      loading: 'The next feature is loading behind the curtain.',
+      answering: 'Choose on your phone. Your first answer is final!',
+      'awaiting-reveal': 'Answers are closed. The host will reveal the answer.',
+      revealed: 'The answer is on screen!', results: 'This question’s results.',
+      cancelled: 'This feature was cancelled. No points awarded.',
+    };
+    const choices = round.options.map((option, index) => {
+      const correct = (revealed || isHost()) && round.correctChoice === index;
+      const selected = me?.answerChoice === index;
+      const label = `${String.fromCharCode(65 + index)}. ${escape(option)}`;
+      const details = `${correct ? ' <span class="pill">Correct answer</span>' : ''}${selected ? ' <span class="pill">Your answer</span>' : ''}`;
+      return me ? button('submit-screengrabber-answer', label + details,
+        !me.canSubmit || !answering || timeLeft(round.deadline) <= 0, `cinema-ticket${correct ? ' correct-ticket' : ''}${selected ? ' selected-ticket' : ''}`,
+        { roundId: round.id, choice: index }) :
+        `<article class="cinema-ticket${correct ? ' correct-ticket' : ''}">${label}${details}</article>`;
+    }).join('');
+    return `<section class="card cinema-round"><div class="between"><div><span class="eyebrow">Feature ${round.number}</span><h2>${revealed ? 'The big reveal' : 'Screengrabbers'}</h2></div>${timer(round.deadline)}</div>
+      <figure class="picture-frame cinema-screen${concealed ? ' curtain-closed' : ' curtain-open'}">
+      <img data-picture-image="${round.id}" src="${escape(round.image.url)}" alt="${escape(round.image.alt)}">
+      ${concealed ? '<div class="curtain-message">Please take your seats</div>' : ''}
+      ${round.image.credit ? `<figcaption>${escape(round.image.credit)}</figcaption>` : ''}</figure>
+      <p class="picture-error" hidden>Image could not load. Check the connection or ask the host to check R2. <button id="retry-picture" class="secondary small">Retry image</button></p>
+      ${round.prompt ? `<h2 class="cinema-question">${escape(round.prompt)}</h2>` : ''}
+      <p role="status">${escape(statuses[round.stage] || '')}</p><div class="cinema-options">${choices}</div>
+      ${me?.submitted && !revealed ? '<p class="success">Answer recorded. Keep it secret until the reveal!</p>' : ''}
+      ${me && !me.participant ? '<p class="private">You joined during this question. You can answer starting next round.</p>' : ''}
+      ${me && revealed ? `<p class="${me.correct ? 'success' : 'private'}">${me.correct ? `Correct! You earned ${state.leaderboards.round.find(entry => entry.id === me.id)?.score || 0} points.` : me.submitted ? 'Not this time. The next feature is another chance!' : 'No answer recorded for this question.'}</p>` : ''}
+      ${isHost() ? `<div class="host-actions"><p class="small-text">${round.readyCount}/${round.participantCount} players have loaded the image. Check the Main Display before opening the curtain.</p><div class="actions">
+      ${button('start-screengrabber-timer', 'Open curtain & start 30 seconds', !loading || !loadedPictures.has(round.id))}
+      ${button('close-screengrabber-answers', 'Close answers early', !answering, 'secondary')}
+      ${button('reveal', 'Reveal answer & award points', round.stage !== 'awaiting-reveal')}
+      ${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}
+      ${button('cancel-round', 'Cancel question…', revealed || round.stage === 'cancelled', 'danger')}</div></div>` : ''}
+      <p class="small-text">${round.submissionCount}/${round.participantCount} answers received. First five correct: 6/5/4/3/2 total points; every other correct answer: 1 point. Ranked by server receipt order.</p>
+      </section>${revealed ? leaderboard('round', 'This feature’s fastest stars') : ''}`;
+  }
+
+  function imageUploadForm(prefix, draft, enabled) {
+    if (!enabled) return '<p class="private">Configure the existing private games R2 bucket in Render to enable uploads. Follow the games manual; never enter storage keys here.</p>';
+    return `<form id="${prefix}-upload-form">
+      <label class="field">Still image (JPEG, PNG or WebP; up to 5 MB)<input id="${prefix}-file" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <p id="${prefix}-selected-name" class="small-text">${draft.file ? `Selected: ${escape(draft.file.name)}` : 'No image selected.'}</p>
+      <label class="field">Private library title<input id="${prefix}-title" maxlength="80" required value="${escape(draft.title)}"></label>
+      <label class="field">Image description for accessibility${prefix === 'screengrabber-image' ? ' (do not give away the answer)' : ''}<input id="${prefix}-alt" maxlength="240" required value="${escape(draft.alt)}"></label>
+      <label class="field">Credit / source<input id="${prefix}-credit" maxlength="160" required value="${escape(draft.credit)}"></label>
+      <label class="check"><input id="${prefix}-permission" type="checkbox" required${draft.permission ? ' checked' : ''}><span>I have permission to use this image and have checked that it suits this audience.</span></label>
+      <button${disabled(false)}>Upload to this game’s album</button></form>`;
+  }
+
+  function screengrabberLibraryView() {
+    const images = state.screengrabberImages || [];
+    const questions = state.screengrabberQuestions || [];
+    return `<section class="card"><details id="screengrabber-library"${screengrabberLibraryOpen ? ' open' : ''}>
+      <summary><strong>Screengrabbers · Image album & questions</strong></summary>
+      <p>Upload your images, then attach one or more multiple-choice questions to each. Questions are picked randomly without repeats until the enabled library is exhausted. Keep image descriptions spoiler-free; credits appear after the reveal.</p>
+      <div class="image-library">${images.map(image => `<article class="answer-card"><img src="${escape(image.url)}" alt="${escape(image.alt)}" loading="lazy">
+      <h3>${escape(image.title)}</h3><p class="small-text">${questions.filter(question => question.imageId === image.id).length} questions · ${escape(image.credit)}</p>
+      ${button('set-screengrabber-image', image.enabled ? 'Disable image' : 'Enable image', false, 'secondary small', { imageId: image.id, enabled: !image.enabled })}</article>`).join('')}</div>
+      <h3>Upload an image</h3>${imageUploadForm('screengrabber-image', screengrabberUploadDraft, state.screengrabberUploadsEnabled)}
+      <h3>${questionDraft.questionId ? 'Edit question' : 'Attach a question'}</h3>
+      ${images.length ? `<form id="screengrabber-question-form">
+      <label class="field">Album image<select id="screengrabber-question-image" required><option value="">Choose an image</option>${images.map(image =>
+        `<option value="${image.id}"${questionDraft.imageId === image.id ? ' selected' : ''}>${escape(image.title)}${image.enabled ? '' : ' (disabled)'}</option>`).join('')}</select></label>
+      <label class="field">Question<input id="screengrabber-prompt" maxlength="240" required value="${escape(questionDraft.prompt)}" placeholder="Which movie is this from?"></label>
+      ${questionDraft.options.map((option, index) => `<label class="field">Choice ${String.fromCharCode(65 + index)}<input id="screengrabber-option-${index}" data-question-option="${index}" maxlength="120" required value="${escape(option)}"></label>`).join('')}
+      <div class="actions"><button type="button" data-question-editor="add"${disabled(questionDraft.options.length >= 6)}>Add choice</button>
+      <button type="button" data-question-editor="remove" class="secondary"${disabled(questionDraft.options.length <= 2)}>Remove last choice</button></div>
+      <label class="field">Correct answer<select id="screengrabber-correct" required><option value="">Mark the correct choice</option>${questionDraft.options.map((_, index) =>
+        `<option value="${index}"${String(questionDraft.correctChoice) === String(index) ? ' selected' : ''}>Choice ${String.fromCharCode(65 + index)}</option>`).join('')}</select></label>
+      <div class="actions"><button${disabled(false)}>Save question</button><button type="button" data-question-editor="new" class="secondary"${disabled(false)}>Clear / new question</button></div></form>` : '<p class="private">Upload an image first, then add its question here.</p>'}
+      <h3>Saved questions (${questions.length})</h3><div class="caption-review">${questions.map(question => `<article class="answer-card">
+      <span class="eyebrow">${escape(images.find(image => image.id === question.imageId)?.title)}</span><h3>${escape(question.prompt)}</h3>
+      <p class="small-text">${question.options.map((option, index) => `${String.fromCharCode(65 + index)}. ${escape(option)}${question.correctChoice === index ? ' (correct)' : ''}`).join('<br>')}</p>
+      <div class="actions"><button type="button" class="secondary small" data-edit-question="${question.id}"${disabled(false)}>Edit</button>
+      ${button('set-screengrabber-question', question.enabled ? 'Disable question' : 'Enable question', false, 'secondary small', { questionId: question.id, enabled: !question.enabled })}</div></article>`).join('')}</div>
+      <p class="small-text">Disabling an image skips all its questions. Edits and disabling affect future rounds, not the current question. Albums and questions survive fresh events.</p>
+      </details></section>`;
   }
 
   function pictureChoices(entries, action, closed = false) {
@@ -481,15 +593,7 @@
       <p>Six original starter illustrations are ready to use. Upload only images you have permission to display. Check each image for suitability; image content is not automatically moderated.</p>
       <div class="image-library">${(state.pictureImages || []).map(image => `<article class="answer-card"><img src="${escape(image.url)}" alt="${escape(image.alt)}" loading="lazy"><h3>${escape(image.title)}</h3><p class="small-text">${escape(image.credit)}</p>
       ${button('set-picture-image', image.enabled ? 'Disable image' : 'Enable image', false, 'secondary small', { imageId: image.id, enabled: !image.enabled })}</article>`).join('')}</div>
-      <h3>Upload an image</h3>${state.pictureUploadsEnabled ? `<form id="image-upload-form">
-      <label class="field">Still image (JPEG, PNG or WebP; up to 5 MB)<input id="image-file" type="file" accept="image/jpeg,image/png,image/webp"></label>
-      <p id="selected-image-name" class="small-text">${uploadDraft.file ? `Selected: ${escape(uploadDraft.file.name)}` : 'No image selected.'}</p>
-      <label class="field">Private library title<input id="image-title" maxlength="80" required value="${escape(uploadDraft.title)}"></label>
-      <label class="field">Image description for accessibility<input id="image-alt" maxlength="240" required value="${escape(uploadDraft.alt)}"></label>
-      <label class="field">Credit / source<input id="image-credit" maxlength="160" required value="${escape(uploadDraft.credit)}"></label>
-      <label class="check"><input id="image-permission" type="checkbox" required${uploadDraft.permission ? ' checked' : ''}><span>I have permission to use this image and have checked that it suits this audience.</span></label>
-      <button${disabled(false)}>Upload to games image storage</button></form>` :
-      '<p class="private">Uploads will be available after R2 is configured in Render. The starter library works now. Follow the dedicated games manual for setup; never enter storage keys here.</p>'}
+      <h3>Upload an image</h3>${imageUploadForm('image', uploadDraft, state.pictureUploadsEnabled)}
       <h3>Additional blocked words and phrases</h3><p class="small-text">One phrase per line. These add to the built-in rules; they cannot disable them. Save before opening captions.</p>
       <form id="picture-policy-form"><textarea id="picture-policy" rows="4" maxlength="4000" aria-label="Additional blocked phrases">${escape(policyDraft ?? state.pictureBlockedTerms.join('\n'))}</textarea><button${disabled(false)}>Save safety additions</button></form>
       <p class="small-text">Automated filtering is not a guarantee. Keep the host panel private and remove unsuitable captions. Use Large audience mode when every caption needs a human review before display.</p>
@@ -509,6 +613,7 @@
     let mainContent = '';
     if (state.event?.status === 'ended') mainContent = finale();
     else if (game?.status === 'ended') mainContent = gameFinal();
+    else if (isScreengrabbers()) mainContent = screengrabberRoundView();
     else if (isPicture()) mainContent = pictureRoundView();
     else if (isCards()) mainContent = cardRoundView();
     else if (round) mainContent = `<section class="card"><div class="between"><div><span class="eyebrow">Private host preview · Round ${round.number}</span><h2>${escape(round.stage.replaceAll('-', ' '))}</h2></div>${timer(round.deadline)}</div>${round.answer ? `<div class="prompt"><span class="small-text">Secret answer — host eyes only</span><strong>${escape(round.answer)}</strong></div>` : ''}${round.stage === 'ready' || round.stage === 'selecting' ? wheels() : ''}${drawings(true)}
@@ -516,18 +621,27 @@
     else mainContent = `<section class="card waiting"><span class="waiting-icon" aria-hidden="true">🎬</span><h2>${game ? 'Ready for round one?' : activeEvent ? 'Your event is open!' : 'Let’s get this show started.'}</h2><p>${activeEvent ? 'Welcome your guests, choose a game, then start a round.' : 'Open a new event to welcome guests.'}</p></section>`;
     const pictureControls = `<form id="picture-game-form"><label class="field">Get The Picture format<select id="picture-mode"${disabled(!canStartGame)}>${[['small', 'Small room — all accepted captions'], ['large', 'Large audience — host-approved captions'], ['poolside', 'Poolside — rotating group judges']].map(([value, label]) => `<option value="${value}"${pictureModeChoice === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button${disabled(!canStartGame)}>Start Get The Picture</button></form>
       ${isPicture() ? `<label class="field">Next round’s image<select id="picture-image"><option value="">Random unused image</option>${state.pictureImages.filter(image => image.enabled).map(image => `<option value="${image.id}"${pictureImageChoice === image.id ? ' selected' : ''}>${escape(image.title)}</option>`).join('')}</select></label>` : ''}`;
-    const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">Family Cards includes toilet humor and dark themes. Start it at the host’s discretion for an appropriate audience.</p></section>`;
-    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
+    const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-game', 'Start Screengrabbers', !canStartGame, '', { type: 'screengrabbers' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() || isScreengrabbers() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isScreengrabbers() ? 'Screengrabbers needs 2–100 connected players and an enabled saved question. Start a round, check image readiness, then open the curtain.' : isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">All events are limited to 100 registered players. Family Cards includes toilet humor and dark themes; start it at the host’s discretion.</p></section>`;
+    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${screengrabberLibraryView()}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
   }
 
   function gameFinal() {
+    if (isScreengrabbers()) return cinemaCredits(false);
     return `${heading('What a game!', state.event?.mode === 'variety' ? 'Keep those smiles. The host will choose the next game.' : 'Thanks for playing!', `${gameTitle()} · final standings`)}<div class="grid split">${leaderboard('game', `Our ${gameTitle()} stars`, 3)}${leaderboard('event', 'The show so far', 5)}</div>`;
   }
 
   function finale() {
+    if (isScreengrabbers()) return cinemaCredits(true);
     return `<section class="finale"><span class="eyebrow">${escape(state.event?.title || 'The Big Draw')} · That’s a wrap</span>
       <svg class="finale-art" viewBox="0 0 660 260" role="img" aria-label="Two stick figures drawn in black pen, followed by a red heart"><rect width="660" height="260" fill="white"/><g stroke="#111111" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"><g class="figure"><circle class="ink head" pathLength="1" cx="210" cy="72" r="25"/><path class="ink body" pathLength="1" d="M210 98V171M210 117L167 97L147 61M210 117L250 98L272 65M210 171L177 222M210 171L241 220"/><path class="ink smile" pathLength="1" d="M202 76Q210 84 218 76" stroke-width="3"/></g><g class="figure second"><circle class="ink head" pathLength="1" cx="450" cy="72" r="25"/><path class="ink body" pathLength="1" d="M450 98V171M450 117L409 98L387 65M450 117L490 96L511 58M450 171L418 221M450 171L483 220"/><path class="ink smile" pathLength="1" d="M442 76Q450 84 458 76" stroke-width="3"/></g><path class="ink heart" pathLength="1" d="M330 118C269 77 291 29 330 60C369 29 391 77 330 118Z" stroke="#e83250" stroke-width="7"/></g></svg>
       <h1>Thank You For Playing</h1><p>The art was one of a kind. So were you.</p><div class="final-standings">${leaderboard('event', 'Our event stars', 3)}</div></section>`;
+  }
+
+  function cinemaCredits(eventFinal) {
+    return `<section class="finale cinema-credits"><span class="eyebrow">${escape(state.event?.title)} · Roll credits</span>
+      <h1>That’s a wrap!</h1><p>Starring a room full of movie lovers. Thanks for playing Screengrabbers.</p>
+      <div class="final-standings">${leaderboard(eventFinal ? 'event' : 'game', 'Tonight’s leading stars', 3)}</div>
+      ${!eventFinal ? `<p>The host will choose the next feature. Your Silly Name and event points stay with you.</p>${leaderboard('event', 'The show so far')}` : ''}</section>`;
   }
 
   function confirmChoice(title, description, choices) {
@@ -568,6 +682,10 @@
     try {
       const result = action === 'logout' ? await api('/api/host/logout', {}) : await api('/api/command', { action, data });
       if (action === 'set-picture-policy') policyDraft = null;
+      if (action === 'save-screengrabber-question') {
+        questionDraft = { questionId: '', imageId: data.imageId, prompt: '', options: ['', '', '', ''], correctChoice: '' };
+        notify('Question saved to the Screengrabbers library.');
+      }
       if (result?.serverTime) receive(result); else await refresh();
       // A socket opened before login carries the old role until it is reconnected.
       if (action === 'logout') socket?.close();
@@ -601,6 +719,39 @@
     finally { busy = false; render(true); }
   }
 
+  function bindImageUpload(prefix, route, draft) {
+    document.getElementById(`${prefix}-file`)?.addEventListener('change', event => {
+      draft.file = event.target.files[0] || null;
+      document.getElementById(`${prefix}-selected-name`).textContent = draft.file ? `Selected: ${draft.file.name}` : 'No image selected.';
+    });
+    for (const field of ['title', 'alt', 'credit']) {
+      document.getElementById(`${prefix}-${field}`)?.addEventListener('input', event => { draft[field] = event.target.value; });
+    }
+    document.getElementById(`${prefix}-permission`)?.addEventListener('change', event => { draft.permission = event.target.checked; });
+    document.getElementById(`${prefix}-upload-form`)?.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      const file = draft.file;
+      if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+        notify('Choose a still JPEG, PNG or WebP image up to 5 MB.');
+        return;
+      }
+      const query = new URLSearchParams({
+        title: draft.title, alt: draft.alt, credit: draft.credit, permission: String(draft.permission),
+      });
+      busy = true;
+      render(true);
+      try {
+        const next = await api(`/api/${route}?${query}`, file, file.type);
+        Object.assign(draft, { file: null, title: '', alt: '', credit: '', permission: false });
+        if (route === 'screengrabber-images' && !questionDraft.imageId) questionDraft.imageId = next.screengrabberImages.at(-1).id;
+        receive(next);
+        notify('Image uploaded to this game’s album.');
+      } catch (error) { notify(error.message); await refresh(); }
+      finally { busy = false; render(true); }
+    });
+  }
+
   function bind() {
     app.querySelectorAll('[data-action]').forEach(element => element.addEventListener('click', () => command(element.dataset.action, JSON.parse(element.dataset.payload))));
     app.querySelectorAll('.qr-card img').forEach(image => image.addEventListener('error', () => {
@@ -626,34 +777,38 @@
       event.preventDefault();
       command('set-picture-policy', { terms: document.getElementById('picture-policy').value });
     });
-    document.getElementById('image-file')?.addEventListener('change', event => {
-      uploadDraft.file = event.target.files[0] || null;
-      document.getElementById('selected-image-name').textContent = uploadDraft.file ? `Selected: ${uploadDraft.file.name}` : 'No image selected.';
-    });
-    for (const field of ['title', 'alt', 'credit']) {
-      document.getElementById(`image-${field}`)?.addEventListener('input', event => { uploadDraft[field] = event.target.value; });
-    }
-    document.getElementById('image-permission')?.addEventListener('change', event => { uploadDraft.permission = event.target.checked; });
-    document.getElementById('image-upload-form')?.addEventListener('submit', async event => {
-      event.preventDefault();
+    bindImageUpload('image', 'picture-images', uploadDraft);
+    bindImageUpload('screengrabber-image', 'screengrabber-images', screengrabberUploadDraft);
+    document.getElementById('screengrabber-library')?.addEventListener('toggle', event => { screengrabberLibraryOpen = event.target.open; });
+    document.getElementById('screengrabber-question-image')?.addEventListener('change', event => { questionDraft.imageId = event.target.value; });
+    document.getElementById('screengrabber-prompt')?.addEventListener('input', event => { questionDraft.prompt = event.target.value; });
+    document.getElementById('screengrabber-correct')?.addEventListener('change', event => { questionDraft.correctChoice = event.target.value; });
+    app.querySelectorAll('[data-question-option]').forEach(field => field.addEventListener('input', event => {
+      questionDraft.options[Number(field.dataset.questionOption)] = event.target.value;
+    }));
+    app.querySelectorAll('[data-question-editor]').forEach(element => element.addEventListener('click', () => {
       if (busy) return;
-      const file = uploadDraft.file;
-      if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
-        notify('Choose a still JPEG, PNG or WebP image up to 5 MB.');
-        return;
+      if (element.dataset.questionEditor === 'add' && questionDraft.options.length < 6) questionDraft.options.push('');
+      if (element.dataset.questionEditor === 'remove' && questionDraft.options.length > 2) {
+        questionDraft.options.pop();
+        if (Number(questionDraft.correctChoice) >= questionDraft.options.length) questionDraft.correctChoice = '';
       }
-      const query = new URLSearchParams({
-        title: uploadDraft.title, alt: uploadDraft.alt, credit: uploadDraft.credit, permission: String(uploadDraft.permission),
-      });
-      busy = true;
+      if (element.dataset.questionEditor === 'new') {
+        questionDraft = { questionId: '', imageId: questionDraft.imageId, prompt: '', options: ['', '', '', ''], correctChoice: '' };
+      }
       render(true);
-      try {
-        const next = await api(`/api/picture-images?${query}`, file, file.type);
-        Object.assign(uploadDraft, { file: null, title: '', alt: '', credit: '', permission: false });
-        receive(next);
-        notify('Image uploaded. It is now available in the games library.');
-      } catch (error) { notify(error.message); await refresh(); }
-      finally { busy = false; render(true); }
+    }));
+    app.querySelectorAll('[data-edit-question]').forEach(element => element.addEventListener('click', () => {
+      if (busy) return;
+      const question = state.screengrabberQuestions.find(item => item.id === element.dataset.editQuestion);
+      questionDraft = { questionId: question.id, imageId: question.imageId, prompt: question.prompt,
+        options: [...question.options], correctChoice: String(question.correctChoice) };
+      render(true);
+      document.getElementById('screengrabber-prompt').focus();
+    }));
+    document.getElementById('screengrabber-question-form')?.addEventListener('submit', event => {
+      event.preventDefault();
+      command('save-screengrabber-question', { ...questionDraft, correctChoice: Number(questionDraft.correctChoice) });
     });
     const picture = app.querySelector('[data-picture-image]');
     if (picture) {
@@ -661,14 +816,16 @@
       const loaded = async () => {
         if (!picture.isConnected || state.round?.id !== roundId) return;
         loadedPictures.add(roundId);
-        const start = app.querySelector('[data-action="start-caption-timer"]');
+        const start = app.querySelector('[data-action="start-caption-timer"], [data-action="start-screengrabber-timer"]');
         if (start) start.disabled = busy || state.round?.stage !== 'loading';
         const errorMessage = app.querySelector('.picture-error');
         if (errorMessage) errorMessage.hidden = true;
         if (page !== 'player' || !state.me?.participant || state.me.imageReady || readyReports.has(roundId) ||
-          !['loading', 'captioning'].includes(state.round?.stage) || state.round.id !== roundId) return;
+          !['loading', 'captioning', 'answering'].includes(state.round?.stage) || state.round.id !== roundId) return;
         readyReports.add(roundId);
-        try { receive(await api('/api/command', { action: 'picture-ready', data: {} })); }
+        try { receive(await api('/api/command', {
+          action: isScreengrabbers() ? 'screengrabber-ready' : 'picture-ready', data: { roundId },
+        })); }
         catch (error) { notify(`Could not confirm image readiness: ${error.message}`); }
         finally { readyReports.delete(roundId); }
       };
@@ -677,7 +834,7 @@
         if (!picture.isConnected || state.round?.id !== roundId) return;
         loadedPictures.delete(roundId);
         app.querySelector('.picture-error').hidden = false;
-        const start = app.querySelector('[data-action="start-caption-timer"]');
+        const start = app.querySelector('[data-action="start-caption-timer"], [data-action="start-screengrabber-timer"]');
         if (start) start.disabled = true;
       };
       if (picture.complete) {
@@ -895,6 +1052,9 @@
       element.disabled = busy || !state.round || timeLeft(state.round.deadline) <= 0 ||
         (voting ? state.round.stage !== 'voting' || !!state.me?.votedFor || payload.submissionId === state.me?.ownSubmissionId :
           state.round.stage !== 'judging' || !state.me?.isJudge || state.me?.nominated);
+    });
+    app.querySelectorAll('button.cinema-ticket').forEach(element => {
+      element.disabled = busy || state.round?.stage !== 'answering' || !state.me?.canSubmit || timeLeft(state.round.deadline) <= 0;
     });
     updateDrawControls();
   }

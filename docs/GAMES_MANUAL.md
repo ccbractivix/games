@@ -5,9 +5,9 @@ This manual covers the standalone Resort Games service. It is not part of RGP an
 ## What runs where
 
 - **Render web service:** Serves the guest application, `/host`, `/display`, WebSocket connections, and the QR endpoint (`GET /api/qr`).
-- **Render PostgreSQL:** Stores the current event snapshot as one JSONB row. The application creates its schema automatically.
+- **Render PostgreSQL:** Stores the current event snapshot and persistent game libraries as one JSONB row. The application creates its schema automatically, including Screengrabbers question storage; operators do not need to create tables or write SQL.
 - **GitHub:** Holds the source and `render.yaml` deployment blueprint.
-- **Cloudflare R2 (optional):** Holds uploaded Get The Picture images in a dedicated private games bucket. Render uploads optimized images; phones and the display read them through temporary signed links. Caption text, scores, image metadata and credentials do not go into public bucket listings.
+- **Cloudflare R2 (optional):** Holds uploaded Get The Picture and Screengrabbers images in a dedicated private games bucket. Each game has its own object prefix and host library. Render uploads optimized images; phones and the display read them through temporary signed links. Questions, correct answers, captions, scores and image metadata stay in the database, not public bucket listings.
 - **Local development:** Uses a JSON snapshot file instead of PostgreSQL by default.
 
 The package is `resort-games` and requires Node.js 22 or newer. The deployed service listens on Render's `PORT` (default `3000` locally), and exposes `/health` for health checks.
@@ -83,16 +83,20 @@ You do not need to buy or configure a domain: the Render-provided `onrender.com`
 
 Domain registration, purchase, and Vercel are not required.
 
-## Get The Picture image storage: Cloudflare R2
+## Games image storage: Cloudflare R2
 
-The six bundled starter illustrations work without Cloudflare. To enable host uploads, configure R2 separately; the Render Blueprint does not create a Cloudflare account, bucket, or credentials. Keep this infrastructure dedicated to games. Do not move an existing resort domain or attach another resort's bucket. An R2 account is a storage service, not a replacement for Render or PostgreSQL.
+The six Get The Picture starter illustrations work without Cloudflare. Screengrabbers requires host-uploaded images and has no bundled movie assets. To enable host uploads, configure R2 separately; the Render Blueprint does not create a Cloudflare account, bucket, or credentials. Keep this infrastructure dedicated to games. Do not move an existing resort domain or attach another resort's bucket. An R2 account is a storage service, not a replacement for Render or PostgreSQL.
+
+Use **one private games bucket**, not one bucket per game. Get The Picture uses `get-the-picture/<random-id>.webp`; Screengrabbers uses `screengrabbers/<random-id>.webp`. These prefixes act like folders. Host albums and database references also stay separate, so neither game's random selection draws from the other's library. Prefixes are not security boundaries: the games server's bucket-scoped credential can access both. Only use separate buckets if independent credentials, jurisdiction, or retention policies require true isolation; that would need additional application configuration. Future image games should follow the same game-specific prefix/library pattern.
+
+**If games R2 is already configured:** keep the same bucket and all four existing Render R2 variables. Deploy this release manually on the existing games service outside event hours. No new Cloudflare token, bucket, Render database, Vercel project, public access, CORS rule, or DNS change is needed. The application creates prefixes when it uploads the first image; do not manually create folders. Then follow the Screengrabbers library steps below.
 
 ### Create the private games bucket
 
 1. Create/sign in to your Cloudflare account and enable two-factor authentication. Open **R2 Object Storage** and enable R2. Cloudflare may require billing information even when usage is within its free allowance. Review the current R2 pricing and billing terms before accepting. A paid Cloudflare website plan is not needed.
 2. In R2, choose **Create bucket**, with a dedicated name such as `resort-games-images-prod`. Choose **Standard** storage, not Infrequent Access. Use an appropriate location/jurisdiction for the resort's requirements; the default automatic location is acceptable when there are no additional requirements.
 3. Keep the bucket **private**: do not enable the Public Development URL (`r2.dev`), connect a custom domain, or enable public access. No domain purchase or DNS changes are required.
-4. Do not add a lifecycle rule deleting the `get-the-picture/` prefix. These are permanent library assets, not temporary uploads.
+4. Do not add lifecycle rules deleting the `get-the-picture/` or `screengrabbers/` prefixes. These are permanent library assets, not temporary uploads.
 5. In R2's API-token management, create an R2 S3-compatible credential with **Object Read & Write** permissions restricted to **this bucket only**. Depending on the dashboard, this is labeled **Manage R2 API Tokens** or an account/user R2 token option. Do not create a global Cloudflare API key, account-admin token, or credentials for all resort buckets.
 6. Copy the displayed **Access Key ID**, **Secret Access Key**, and account ID into a private password manager. The S3 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; the app constructs it from the account ID. Use the S3 access-key pair, not the Cloudflare bearer-token string. The secret may only be shown once. Never send these values through chat, GitHub, screenshots, or event materials.
 
@@ -109,11 +113,11 @@ The six bundled starter illustrations work without Cloudflare. To enable host up
    | `R2_SECRET_ACCESS_KEY` | Its corresponding secret access key. |
 
 3. Save and deploy the reviewed games release from Render's **Manual Deploy** menu. Automatic deploy remains disabled and the service remains single-instance. Supplying only some R2 variables is a startup error; leave all four unset/blank if using only starter images.
-4. Check `/health`. Sign in to `/host`, expand **Get The Picture - Image library & safety**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
+4. Check `/health`. Sign in to `/host`, expand **Get The Picture - Image library & safety** or **Screengrabbers - Image album & questions**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
 5. Upload a small test image you own. Enter its title, accessibility description, and credit/source, and confirm permission to use it. A successful upload checks write access. Open its library preview to check read access.
 6. Choose Get The Picture, start a test round with that image, and check it on an independent phone and `/display` over the real HTTPS site. Confirm it finishes loading before starting the timer. This is the end-to-end Cloudflare verification; local tests with simulated storage do not verify a real account.
 
-Uploads pass through the authenticated games server, are decoded and re-encoded as still WebP images, resized within 1600 x 1200, and stripped of metadata. Inputs are limited to JPEG, PNG or WebP, 5 MB and 20 megapixels. SVG and animated uploads are rejected. Only the bundled, original SVG illustrations are trusted SVGs. There are up to 200 uploaded library assets, with an upload rate limit of 20 per hour per host IP. Coordinate bulk library changes before an event.
+Uploads pass through the authenticated games server, are decoded and re-encoded as still WebP images, resized within 1600 x 1200, and stripped of metadata. Inputs are limited to JPEG, PNG or WebP, 5 MB and 20 megapixels. SVG and animated uploads are rejected. Only the bundled, original SVG illustrations are trusted SVGs. Each game's album holds up to 200 uploaded assets. The upload rate limit is 20 per hour per host IP, shared across games. Coordinate bulk library changes before an event.
 
 Players and the display use the app's same-origin image route, which redirects to an R2 link valid for one hour. The bucket remains private; anyone holding a temporary link can view that image until expiry. Do not use this library for confidential or personal photographs. These ordinary image loads do not require a bucket CORS rule; uploads are server-side, not direct browser uploads. The app allows only this account's R2 image origin in its content-security policy.
 
@@ -147,7 +151,7 @@ Use a laptop connected to the TV/projector by HDMI for the most predictable disp
 The game runs on Render, not on the laptop: the laptop needs only a modern browser. Guests can use resort Wi-Fi or mobile data; they do not need the same local network. Complete any Wi-Fi sign-in page before joining. Artists should keep their phone screen open during their drawing attempt. For local phone testing only, use the laptop's LAN address instead of `localhost`; do not expose the development server to the public internet.
 
 1. Open `/host` and sign in with `HOST_PASSWORD`.
-2. Create an event and choose its title and format: standalone (one game) or Variety Show. The event opens guest registration. Choose **Start Big Draw**, **Start Family Cards**, or a Get The Picture format from the host controls.
+2. Create an event and choose its title and format: standalone (one game) or Variety Show. The event opens guest registration, up to 100 registered players for every game and format. Disconnected players still occupy their registration; their existing device can rejoin at capacity. Choose **Start Big Draw**, **Start Family Cards**, **Start Screengrabbers**, or a Get The Picture format from the host controls.
 3. Give guests the QR code or site URL. Guests choose a building, room, and (where offered) unit using the room picker, choose whether they are willing to draw, and join. The game assigns a silly player name. There is no typed room-code flow.
 4. Open `/display?display=1` on the projection device. Keep host controls private. This public display view stays sanitized even if opened in a browser that also has a host login.
 5. Start Pictionary from the host view, then start a new round. The host does not choose the prompt; the game randomly selects a secret word and its two parts.
@@ -209,7 +213,37 @@ Keep `.venv` outside source control. The importer checks the printed grid and ex
 
 For local closed-group phone access, start the existing Node service and use the computer's LAN address in guest and display browsers. `localhost` on a phone refers to that phone, not the server. Keep access restricted to the intended network; do not port-forward the local service to the internet. Local snapshots remain in the configured `DATA_FILE`; production still requires the dedicated PostgreSQL backend described above.
 
-### Get The Picture
+### Screengrabbers
+
+Screengrabbers is an "at the movies" image quiz with a cinema marquee, red curtains, ticket-styled choices and a roll-credits finale. It supports 2-100 connected players without drawing volunteers, standalone or in a Variety Show. Silly Names and cumulative event points carry between Variety Show games; the host chooses the next game live.
+
+### Build the image album and question library
+
+1. Sign in to `/host` and expand **Screengrabbers - Image album & questions**. Configure R2 using the complete steps above if uploads are unavailable. You can prepare the library before opening an event.
+2. Upload a still JPEG, PNG or WebP up to 5 MB. Supply a private title, an accessibility description, a credit/source, and confirmation of permission and audience suitability. Movie screenshots may require appropriate display rights; the application does not provide licensed movie assets or determine those rights for you. Review image content yourself.
+3. Keep the accessibility description **spoiler-free**: guests can read it during answering. Private titles never appear on guest screens. Credits/sources appear only after the answer reveal because they may name the film.
+4. Select an uploaded image under **Attach a question**, enter a question (up to 240 characters), provide 2-6 distinct choices (up to 120 characters each), select the correct choice, and save. Add another question against the same image if needed. Up to 1,000 saved questions are supported.
+5. Use **Edit** to revise a saved question. Disable individual questions to exclude them, or disable an image to exclude all its questions. Editing or disabling cannot change a live round: its question, choices, correct answer and image details were copied when it started.
+6. Albums, questions and enabled/disabled settings survive **New event**. A new event clears player registrations, scores and question-use history, not the content library. Every enabled question with an enabled image is eligible for random selection once per cycle. When the available questions are exhausted, selection starts a new cycle and avoids immediately repeating the preceding question when alternatives exist. An album with one eligible question necessarily repeats. Different questions using the same image can appear in one cycle.
+
+### Run a game
+
+1. Open a standalone or Variety Show event. Welcome at least two connected players, then choose **Start Screengrabbers**.
+2. Choose **Start a new round**. The server selects a question randomly and preloads its image on devices behind the curtain; the question and choices are hidden from guests until answering opens. The host gets a private preview, including the correct answer.
+3. Check the loaded-player count, the private image preview and the Main Display. If the image fails, use **Retry image** and check R2 credentials, bucket access and Render logs. Do not start with a broken image.
+4. Choose **Open curtain & start 30 seconds**. The image, question and choices appear together on phones and the Main Display. The countdown gives 30 seconds from this action, not from preload. Players tap a choice to submit immediately. Their first accepted answer is final, including an incorrect answer; correctness is not disclosed before the reveal.
+5. **Close answers early** is optional; otherwise the server closes at the deadline. Guests joining after a question was selected wait until the next question. Reconnecting participants retain their submission and can answer only if they have not already submitted and time remains.
+6. Choose **Reveal answer & award points**. All correct answers earn 1 point. The first five correct responses, in server receipt order (not a device's clock), get additional 5/4/3/2/1 bonuses: **6/5/4/3/2 total points**, followed by 1 for every other correct answer. Wrong or missing answers earn zero and do not consume bonus places. Equal recorded timestamps retain server receipt order. Venue latency can affect speed ranking.
+7. Scoring happens exactly once on reveal and updates game and cumulative event scores. The top-five round panel shows speed leaders; every correct player sees their own earned points. Use **Round results**, **Show scoreboard**, **Start a new round**, or **Conclude game**. A cancelled unscored question awards no points.
+8. Restart recovery retains the live question, submissions and original deadline. An expired answering window closes after restart, but the host must still reveal to award points. No countdown extension or duplicate awards occur. Concluding a standalone game ends the event; concluding a Variety Show game retains players and event totals.
+
+### Backup and retirement
+
+Back up the database snapshot and matching private R2 objects together; database backups do not contain image bytes. Keep original images and the permissions/source information. Ordinary host controls disable content rather than delete it.
+
+For permanent retirement or the 200-image/1,000-question limit, an operator must back up and stop the games service, remove the exact retired entries from `screengrabberQuestions`, remove retired image references from `screengrabberImages`, and delete only those images' exact `key` objects from R2. Remove all questions referencing an image before removing that image. Do not retire an image or question referenced by the saved current round; retain it until a different round is selected. Restart and verify both albums and guest image viewing afterward. Do not delete the bucket or the other game's prefix. This is administrative maintenance, not a host game control.
+
+## Get The Picture
 
 This caption game runs standalone or in a Variety Show with the same Silly Names, registrations and cumulative event scores. It supports 2-100 registered players; drawing willingness is irrelevant. The built-in library contains six original Resort Games illustrations, not third-party photographs. Host-uploaded images require the dedicated R2 setup above.
 
