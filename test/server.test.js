@@ -481,6 +481,76 @@ test('R2 configuration is explicit, private viewing URLs are signed, and failed 
   assert.equal((await unavailable.post('/api/picture-images', {}, login.cookie)).body.code, 'IMAGE_STORAGE_UNAVAILABLE');
 });
 
+test('Lineup uploads stay isolated and only current collage images are available to guests', async t => {
+  const uploaded = [];
+  const imageStorage = {
+    configured: true, imageOrigin: 'https://storage.example.test',
+    async upload(body, game) { uploaded.push({ body, game }); return `${game}/${uploaded.length}.webp`; },
+    async url(key) { return `https://storage.example.test/${key}?signed=yes`; },
+    async remove() {}, close() {},
+  };
+  const { engine, base, post, snapshots } = await service(t, { imageStorage, timing: { lineup: 60000 } });
+  const { cookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  const host = (action, data = {}) => post('/api/command', { action, data }, cookie);
+  const buffer = await sharp({ create: { width: 12, height: 8, channels: 3, background: '#ffffff' } }).png().toBuffer();
+  for (let index = 0; index < 3; index++) {
+    const url = `${base}/api/lineup-images?title=Private+name+${index}&alt=A+person&credit=Private+source&permission=true`;
+    if (!index) assert.equal((await fetch(url, {
+      method: 'POST', headers: { Origin: base, 'Content-Type': 'image/png' }, body: buffer,
+    })).status, 401);
+    const response = await fetch(url, {
+      method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'image/png' }, body: buffer,
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).lineupUploadsEnabled, true);
+  }
+  assert.ok(uploaded.every(item => item.game === 'lineup'));
+  assert.equal((await sharp(uploaded[0].body).metadata()).format, 'webp');
+  assert.equal(engine.state.screengrabberImages.length, 0);
+  assert.equal(engine.state.pictureImages.length, 0);
+  const files = engine.state.lineupImages.map(image => `${base}/api/lineup-images/${image.id}/file`);
+  assert.equal((await fetch(files[0], { redirect: 'manual' })).status, 404);
+  assert.equal((await fetch(files[0], { headers: { Cookie: cookie }, redirect: 'manual' })).status, 307);
+  await host('save-lineup-question', {
+    prompt: 'Who is in the news?', correctChoice: 0, revealName: 'Private reveal', explanation: 'Private explanation',
+    choices: engine.state.lineupImages.slice(0, 2).map(image => ({ imageId: image.id, x: 10, y: 80 })),
+  });
+  await host('new-event', { mode: 'variety' });
+  const phones = [];
+  for (let index = 0; index < 2; index++) {
+    const joined = await post('/api/join', { room: '1104', canDraw: false });
+    const socket = new WebSocket(`${base.replace('http', 'ws')}/ws`, { origin: base, headers: { Cookie: joined.cookie } });
+    await once(socket, 'message');
+    phones.push({ socket, cookie: joined.cookie });
+    t.after(() => socket.terminate());
+  }
+  assert.equal((await host('start-game', { type: 'lineup' })).status, 200);
+  assert.equal((await host('start-round')).status, 200);
+  const roundId = engine.state.round.id;
+  for (const file of files.slice(0, 2)) assert.equal((await fetch(file, { redirect: 'manual' })).status, 307);
+  assert.equal((await fetch(files[2], { redirect: 'manual' })).status, 404);
+  const display = await (await fetch(`${base}/api/state?display=1`)).json();
+  assert.equal(display.round.prompt, null);
+  assert.equal(display.round.images.length, 2);
+  assert.ok(!JSON.stringify(display).includes('Private'));
+  assert.equal((await host('start-lineup-timer')).status, 200);
+  const answer = await post('/api/command', { action: 'submit-lineup-answer', data: { roundId, choice: 0 } }, phones[0].cookie);
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body.me.correct, null);
+  assert.equal((await post('/api/command', {
+    action: 'submit-lineup-answer', data: { roundId, choice: 1 },
+  }, phones[0].cookie)).status, 400);
+  await host('set-lineup-image', { imageId: engine.state.lineupImages[0].id, enabled: false });
+  assert.equal((await fetch(files[0], { redirect: 'manual' })).status, 307);
+  await host('close-lineup-answers');
+  await host('reveal');
+  assert.equal(snapshots.at(-1).players[0].eventScore, 6);
+  assert.equal(engine.view().round.revealName, 'Private reveal');
+  await host('end-game', { allowTie: true });
+  await host('start-game', { type: 'screengrabbers' });
+  assert.equal((await fetch(files[0], { redirect: 'manual' })).status, 404);
+});
+
 test('Screengrabbers album uploads are isolated and 100 phones receive private answers and persisted speed scores', { timeout: 30000 }, async t => {
   const uploaded = [];
   const imageStorage = {

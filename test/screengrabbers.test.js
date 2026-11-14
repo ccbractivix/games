@@ -197,7 +197,7 @@ test('late joins wait for next question, single-item libraries repeat, and stand
 });
 
 test('all game types and lobbies enforce the 100-player event ceiling but permit existing-player rejoin', () => {
-  for (const type of [null, 'pictionary', 'family-cards', 'get-the-picture', 'screengrabbers']) {
+  for (const type of [null, 'pictionary', 'family-cards', 'get-the-picture', 'screengrabbers', 'lineup']) {
     const engine = new Engine({ random: () => 0 });
     engine.command('host', null, 'new-event', { mode: 'variety' });
     if (type) engine.command('host', null, 'start-game', { type, pictureMode: 'small' });

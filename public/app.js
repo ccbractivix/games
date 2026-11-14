@@ -35,13 +35,24 @@
   const screengrabberUploadDraft = { file: null, title: '', alt: '', credit: '', permission: false };
   let screengrabberLibraryOpen = false;
   let questionDraft = { questionId: '', imageId: '', prompt: '', options: ['', '', '', ''], correctChoice: '' };
+  const lineupUploadDraft = { file: null, title: '', alt: '', credit: '', permission: false };
+  const newLineupDraft = () => ({ questionId: '', prompt: '', choices: Array.from({ length: 2 },
+    () => ({ imageId: '', x: 50, y: 50 })), correctChoice: null, revealName: '', explanation: '' });
+  let lineupDraft = newLineupDraft();
+  let lineupLibraryOpen = false;
+  let lineupMobilePreviewOpen = false;
+  let lineupSelection = null;
+  const photoDialog = document.createElement('dialog');
+  photoDialog.className = 'lineup-photo-dialog';
+  document.body.append(photoDialog);
   const requests = new Map();
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const isHost = () => page === 'host' && state?.role === 'host';
   const isCards = () => state?.game?.type === 'family-cards';
   const isPicture = () => state?.game?.type === 'get-the-picture';
   const isScreengrabbers = () => state?.game?.type === 'screengrabbers';
-  const gameTitle = () => isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'Pictionary';
+  const isLineup = () => state?.game?.type === 'lineup';
+  const gameTitle = () => isLineup() ? 'Lineup' : isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'Pictionary';
   const connected = () => socket?.readyState === WebSocket.OPEN;
   const shown = () => publicStages.has(state?.round?.stage);
   const timeLeft = deadline => Math.max(0, Math.ceil((deadline - (Date.now() + offset)) / 1000));
@@ -168,10 +179,14 @@
     if (isHost() && pictureImageChoice && !state.pictureImages.some(image => image.id === pictureImageChoice && image.enabled)) {
       pictureImageChoice = '';
     }
-    const title = isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
+    const title = isLineup() ? 'Lineup' : isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
     document.querySelector('.brand-name').textContent = title;
-    document.querySelector('.brand-icon').textContent = isScreengrabbers() ? '▶' : isPicture() ? '▣' : isCards() ? '5' : '✎';
+    document.querySelector('.brand-icon').textContent = isLineup() ? 'L' : isScreengrabbers() ? '▶' : isPicture() ? '▣' : isCards() ? '5' : '✎';
     document.body.classList.toggle('screengrabbers', isScreengrabbers());
+    document.body.classList.toggle('lineup', isLineup());
+    if (previous?.round?.id !== next.round?.id || previous?.round?.stage !== next.round?.stage || !isLineup()) {
+      photoDialog.close();
+    }
     document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${title}`;
     offset = next.serverTime - Date.now();
     if (previous?.round?.id !== next.round?.id || previous?.me?.artistSlot !== next.me?.artistSlot) {
@@ -179,6 +194,7 @@
       optimistic = [];
       captionDraft = { roundId: next.round?.id || null, text: '' };
       displayCaptionPage = 0;
+      lineupSelection = null;
     }
     const own = next.round?.slots?.[next.me?.artistSlot];
     if (own) optimistic = optimistic.filter(entry => !own.drawing.some(stroke => JSON.stringify(stroke.points) === JSON.stringify(entry.stroke.points)));
@@ -209,6 +225,8 @@
     } : null;
     const eventDraft = document.getElementById('event-form') ? { title: document.getElementById('event-title').value, mode: document.getElementById('event-mode').value } : null;
     const previousPicture = app.querySelector('[data-picture-image]');
+    const previousLineupPhotos = new Map([...app.querySelectorAll('[data-lineup-round]')]
+      .map(image => [image.getAttribute('src'), image]));
     app.removeAttribute('aria-busy');
     if (page === 'host') app.innerHTML = isHost() ? hostView() : loginView();
     else if (page === 'player') app.innerHTML = state.me ? playerView() : joinView();
@@ -225,6 +243,13 @@
         nextPicture.replaceWith(previousPicture);
       }
     }
+    app.querySelectorAll('[data-lineup-round]').forEach(image => {
+      const previous = previousLineupPhotos.get(image.getAttribute('src'));
+      if (previous?.dataset.lineupRound === image.dataset.lineupRound) {
+        previous.alt = image.alt;
+        image.replaceWith(previous);
+      }
+    });
     document.body.classList.toggle('event-ended', state.event?.status === 'ended');
     document.body.dataset.roundStage = state.round?.stage || '';
     bind();
@@ -235,7 +260,7 @@
     if (savedField) {
       const field = document.getElementById(savedField.id);
       if (field) {
-        if (!savedField.id.startsWith('screengrabber-') && !savedField.id.startsWith('image-')) field.value = savedField.value;
+        if (!savedField.id.startsWith('screengrabber-') && !savedField.id.startsWith('lineup-') && !savedField.id.startsWith('image-')) field.value = savedField.value;
         field.focus({ preventScroll: true });
         if (savedField.start !== null && field.setSelectionRange && field.type !== 'number') field.setSelectionRange(savedField.start, savedField.end);
       }
@@ -250,6 +275,13 @@
   }
 
   function joinView() {
+    if (isLineup()) return `${heading('Who is making headlines?', 'Read the headline. Tap a face. Lock in your answer.', state.event?.title || 'Lineup')}
+      <section class="card loading lineup-magazine"><span class="eyebrow">The celebrity headline quiz · Maximum 100 players</span><h2>Join Lineup</h2>
+      <form id="join-form"><div id="room-picker"></div>
+      <label class="check"><input id="can-draw" type="checkbox" checked><span><strong>Volunteer for Big Draw too</strong>This only affects drawing games, not Lineup.</span></label>
+      <button class="full" id="join-submit"${disabled(!state.joinOpen)}>Get on the guest list</button>
+      <p id="join-status" class="small-text">${state.joinOpen ? 'Your silly name is waiting for you.' : 'Joining is paused.'}</p></form>
+      <p>30 seconds to lock in. Every correct answer earns a point; the first five earn speed bonuses. Join mid-round and play the next headline.</p></section>`;
     if (isScreengrabbers()) return `${heading('Your ticket to movie night.', 'Spot the image. Pick your answer. Be quick for bonus points!', state.event?.title || 'Screengrabbers')}
       <section class="card loading"><span class="eyebrow">Now admitting · Maximum 100 players</span><h2>Join Screengrabbers</h2>
       <form id="join-form"><div id="room-picker"></div>
@@ -360,6 +392,7 @@
     if (state.event?.status === 'ended' || state.display === 'event-final') return identity() + finale();
     if (state.display === 'game-final') return identity() + gameFinal();
     if (state.display === 'scoreboard') return identity() + intro + `<div class="grid split">${leaderboard('game', 'This game')}${leaderboard('event', 'The whole show')}</div>`;
+    if (isLineup()) return identity() + intro + lineupRoundView() + leaderboard('game', 'Making headlines');
     if (isScreengrabbers()) return identity() + intro + screengrabberRoundView() + leaderboard('game', 'Box office leaders');
     if (isPicture()) return identity() + intro + pictureRoundView() + leaderboard('game', 'The score so far');
     if (isCards()) return identity() + intro + cardRoundView() + leaderboard('game', 'The score so far');
@@ -384,6 +417,7 @@
     if (state.display === 'game-final') return gameFinal();
     const intro = heading(state.event?.title || 'The Big Draw', state.game ? `${gameTitle()} · Game ${state.game.number}${state.round ? ` · Round ${state.round.number}` : ''}` : 'A room full of people. A world of imagination.', 'Play together');
     if (state.display === 'scoreboard') return intro + `<div class="grid split">${leaderboard('game', `${gameTitle()} leaderboard`)}${leaderboard('event', 'Variety Show leaderboard')}</div>`;
+    if (isLineup()) return intro + lineupRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isScreengrabbers()) return intro + screengrabberRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isPicture()) return intro + pictureRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
     if (isCards()) return intro + cardRoundView() + (!state.round ? `<div class="grid split">${roster()}${qrCard()}</div>` : '');
@@ -427,6 +461,108 @@
       <p role="status">${escape(status)}</p>${me?.votedFor && voting ? '<p class="success">Your vote is recorded. Results appear when voting closes.</p>' : ''}${answers}
       ${isHost() && round ? `<div class="actions host-actions">${button('close-submissions', 'Close submissions now', !submitting)}${button('close-voting', 'Close voting & show results', !voting)}${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}${button('cancel-round', 'Cancel round…', !submitting && !voting, 'danger')}</div>` : ''}
       <p class="small-text">30 seconds to submit, closing early at five answers; then 30 seconds to vote. One vote each. Ranked points: 5/4/3/2/1; ties share their rank and skip the next position. Answers without votes earn no points.</p></section>${hand}${revealed ? leaderboard('round', 'This round’s stars') : ''}`;
+  }
+
+  function lineupCollage(images, { selectable = false, selected = null, correct = null, concealed = false,
+    editor = false, roundId = null, zoom = false } = {}) {
+    return `<div class="lineup-collage${concealed ? ' lineup-concealed' : ''}" data-count="${images.length}">${images.map((image, index) => {
+      const description = `Photo ${index + 1}${image.alt ? `: ${image.alt}` : ''}`;
+      const photo = image.url ? `<img src="${escape(image.url)}" alt="${escape(description)}" data-lineup-x="${image.x}" data-lineup-y="${image.y}"${roundId ? ` data-lineup-round="${roundId}"` : ''}>` : '<span>Choose an album image</span>';
+      const classes = `lineup-photo${selected === index ? ' lineup-selected' : ''}${correct === index ? ' lineup-correct' : ''}`;
+      return `<div class="lineup-panel">${selectable || editor ?
+        `<button type="button" class="${classes}" data-lineup-${editor ? 'correct' : 'select'}="${index}" aria-label="${escape(description)}" aria-pressed="${selected === index || correct === index}"${disabled(!image.url)}>${photo}</button>` :
+        `<div class="${classes}">${photo}</div>`}
+        ${selected === index ? '<span class="lineup-stamp">Your choice</span>' : ''}
+        ${correct === index ? '<span class="lineup-stamp lineup-answer">Correct answer</span>' : ''}
+        ${zoom && image.url ? `<button type="button" class="secondary small lineup-enlarge" data-lineup-zoom="${index}" aria-label="Enlarge photo ${index + 1} without selecting">Enlarge photo</button>` : ''}</div>`;
+    }).join('')}</div>`;
+  }
+
+  function lineupRoundView() {
+    const round = state.round;
+    if (!round) return `<section class="card lineup-magazine waiting"><span class="lineup-masthead">LINEUP</span><span class="eyebrow">Everyone has a story</span><h2>Who is making headlines?</h2><p>The host will publish the first headline shortly. Tap a face, then Lock in. Every correct answer earns a point; the first five earn speed bonuses.</p></section>`;
+    const me = page === 'player' ? state.me : null;
+    const answering = round.stage === 'answering';
+    const revealed = ['revealed', 'results'].includes(round.stage);
+    const concealed = round.stage === 'loading' && !isHost();
+    if (page === 'display' && round.stage === 'results') {
+      return `<section class="card lineup-magazine"><span class="lineup-masthead">LINEUP</span><span class="eyebrow">Edition ${round.number} · Results</span>
+        <h2 class="lineup-headline">${escape(round.prompt)}</h2>${leaderboard('round', 'This edition’s fastest correct answers', 5)}</section>`;
+    }
+    const canSelect = me?.canSubmit && answering && timeLeft(round.deadline) > 0;
+    const selected = me?.submitted ? me.answerChoice : lineupSelection;
+    const statuses = {
+      loading: 'The next edition is loading. Keep your eyes on the headline.',
+      answering: 'Tap a face, then Lock in. You can change your choice until you confirm.',
+      'awaiting-reveal': 'The presses have stopped. Answers are closed.',
+      revealed: 'The story is out!', results: 'This edition’s results.',
+      cancelled: 'This headline was withdrawn. No points awarded.',
+    };
+    return `<section class="card lineup-magazine"><div class="between"><span class="lineup-masthead">LINEUP</span>${timer(round.deadline)}</div>
+      <span class="eyebrow">The celebrity headline quiz · Edition ${round.number}</span>
+      <h2 class="lineup-headline">${escape(round.prompt || 'Your next headline is under wraps')}</h2>
+      <p role="status">${escape(statuses[round.stage] || '')}</p>
+      <div class="lineup-spread">${lineupCollage(round.images, { selectable: canSelect, selected, correct: revealed || isHost() ? round.correctChoice : null,
+        concealed, roundId: round.id, zoom: !concealed && page !== 'display' })}
+      ${round.revealName || round.explanation ? `<aside class="lineup-story"><span class="eyebrow">${revealed ? 'Behind the headline' : 'Private reveal preview'}</span>${round.revealName ? `<h3>${escape(round.revealName)}</h3>` : ''}${round.explanation ? `<p>${escape(round.explanation)}</p>` : ''}</aside>` : ''}</div>
+      ${concealed ? '<p class="private">Photos and headline appear when the host opens answering.</p>' : ''}
+      <p id="lineup-image-error" class="picture-error" hidden>Some photos could not load. Check your connection or ask the host to check R2. <button type="button" id="lineup-retry" class="secondary small">Retry photos</button></p>
+      ${me ? `<div class="actions">${button('submit-lineup-answer', me.submitted ? 'Answer locked in' : 'Lock in',
+        !canSelect || !Number.isInteger(selected), '', { roundId: round.id, choice: selected })}</div>
+        <p class="small-text" role="status">${me.submitted ? 'Your answer is final. Speed is ranked when the server receives Lock in.' : Number.isInteger(selected) ? 'Photo selected. Press Lock in to submit; tapping alone does not count.' : 'No photo selected yet.'}</p>` : ''}
+      ${me && !me.participant ? '<p class="private">You joined during this headline. You can answer starting next round.</p>' : ''}
+      ${me && revealed ? `<p class="${me.correct ? 'success' : 'private'}">${me.correct ? `Correct! You earned ${state.leaderboards.round.find(entry => entry.id === me.id)?.score || 0} points.` : me.submitted ? 'Not this time. Another headline is another chance!' : 'No answer was locked in.'}</p>` : ''}
+      ${round.images.some(image => image.credit) ? `<p class="small-text">Photo credits: ${round.images.map(image => escape(image.credit)).join(' / ')}</p>` : ''}
+      ${isHost() ? `<div class="host-actions"><p>${round.readyCount}/${round.participantCount} players have loaded every photo. Check the Main Display too.</p><div class="actions">
+        ${button('start-lineup-timer', 'Publish headline & start 30 seconds', round.stage !== 'loading' || !loadedPictures.has(round.id))}
+        ${button('close-lineup-answers', 'Close answers early', !answering, 'secondary')}
+        ${button('reveal', 'Reveal answer & award points', round.stage !== 'awaiting-reveal')}
+        ${button('round-results', 'Round results', round.stage !== 'revealed', 'secondary')}
+        ${button('cancel-round', 'Cancel headline…', revealed || round.stage === 'cancelled', 'danger')}</div></div>` : ''}
+      <p class="small-text">${round.submissionCount}/${round.participantCount} answers locked in. First five correct: 6/5/4/3/2 total points; every other correct answer: 1. Ranked by server receipt of Lock in.</p>
+      ${revealed && page !== 'display' ? leaderboard('round', 'This edition’s fastest correct answers', 5) : ''}</section>`;
+  }
+
+  function lineupDraftImages() {
+    return lineupDraft.choices.map(choice => ({ ...state.lineupImages.find(image => image.id === choice.imageId), ...choice }));
+  }
+
+  function lineupDraftPreview() {
+    const collage = () => lineupCollage(lineupDraftImages(), { editor: true, correct: lineupDraft.correctChoice });
+    return `<p class="small-text">Click the correct face in either preview. Both use the same reading order and framing as the live game.</p>
+      <div class="lineup-magazine lineup-editor-preview"><span class="lineup-masthead">LINEUP</span><h3 class="lineup-headline">${escape(lineupDraft.prompt || 'Your headline preview')}</h3>${collage()}</div>
+      <details id="lineup-mobile-preview"${lineupMobilePreviewOpen ? ' open' : ''}><summary>Mobile-sized preview</summary><div class="lineup-mobile-preview lineup-magazine"><span class="lineup-masthead">LINEUP</span><h3 class="lineup-headline">${escape(lineupDraft.prompt || 'Your headline preview')}</h3>${collage()}</div></details>
+      ${lineupDraft.revealName || lineupDraft.explanation ? `<aside class="lineup-story"><span class="eyebrow">Private reveal preview</span><h3>${escape(lineupDraft.revealName)}</h3><p>${escape(lineupDraft.explanation)}</p></aside>` : ''}`;
+  }
+
+  function lineupLibraryView() {
+    const images = state.lineupImages || [];
+    const questions = state.lineupQuestions || [];
+    return `<section class="card"><details id="lineup-library"${lineupLibraryOpen ? ' open' : ''}><summary><strong>Lineup · Face album & headline library</strong></summary>
+      <p>Upload individual face photos, then choose 2–4 per headline. Keep descriptions spoiler-free: do not name celebrities. Private titles never reach players; credits, reveal names and explanations stay private until reveal.</p>
+      <div class="image-library">${images.map(image => `<article class="answer-card"><img src="${escape(image.url)}" alt="${escape(image.alt)}" loading="lazy"><h3>${escape(image.title)}</h3><p class="small-text">${escape(image.credit)}</p>
+        ${button('set-lineup-image', image.enabled ? 'Disable image' : 'Enable image', false, 'secondary small', { imageId: image.id, enabled: !image.enabled })}</article>`).join('')}</div>
+      <h3>Upload a face photo</h3>${imageUploadForm('lineup-image', lineupUploadDraft, state.lineupUploadsEnabled)}
+      <h3>${lineupDraft.questionId ? 'Edit headline' : 'Create a headline'}</h3>
+      ${images.length >= 2 ? `<form id="lineup-question-form">
+        <label class="field">Caption / headline<input id="lineup-prompt" maxlength="240" required value="${escape(lineupDraft.prompt)}"></label>
+        <div class="image-library">${lineupDraft.choices.map((choice, index) => `<fieldset class="lineup-panel-editor"><legend>Photo ${index + 1}</legend>
+          <label class="field">Album image<select id="lineup-image-${index}" data-lineup-image-choice="${index}" required><option value="">Choose a face</option>${images.map(image => `<option value="${image.id}"${image.id === choice.imageId ? ' selected' : ''}>${escape(image.title)}${image.enabled ? '' : ' (disabled)'}</option>`).join('')}</select></label>
+          <label class="field">Horizontal focal position<input id="lineup-x-${index}" data-lineup-position="${index}" data-axis="x" type="range" min="0" max="100" value="${choice.x}"></label>
+          <label class="field">Vertical focal position<input id="lineup-y-${index}" data-lineup-position="${index}" data-axis="y" type="range" min="0" max="100" value="${choice.y}"></label>
+          </fieldset>`).join('')}</div>
+        <p class="small-text">Move the focal sliders to keep each face in frame. Enlarged photos show the full original image. The game does not detect faces automatically.</p>
+        <div class="actions"><button type="button" data-lineup-editor="add"${disabled(lineupDraft.choices.length >= 4)}>Add face</button><button type="button" class="secondary" data-lineup-editor="remove"${disabled(lineupDraft.choices.length <= 2)}>Remove last face</button></div>
+        <div id="lineup-draft-preview">${lineupDraftPreview()}</div>
+        <label class="field">Celebrity name for reveal (optional)<input id="lineup-revealName" maxlength="120" value="${escape(lineupDraft.revealName)}"></label>
+        <label class="field">Reveal explanation (optional)<textarea id="lineup-explanation" maxlength="600" rows="3">${escape(lineupDraft.explanation)}</textarea></label>
+        <div class="actions"><button${disabled(!Number.isInteger(lineupDraft.correctChoice))}>Save headline</button><button type="button" class="secondary" data-lineup-editor="new"${disabled(false)}>Clear / new headline</button></div></form>` :
+        '<p class="private">Upload at least two different face images to create a headline.</p>'}
+      <h3>Saved headlines (${questions.length})</h3><div class="caption-review">${questions.map(question => `<article class="answer-card"><h3>${escape(question.prompt)}</h3>
+        <p class="small-text">${question.choices.length} photos · Correct: ${escape(images.find(image => image.id === question.choices[question.correctChoice].imageId)?.title)}${question.enabled ? '' : ' · Disabled'}</p>
+        <div class="actions"><button type="button" class="secondary small" data-lineup-edit="${question.id}"${disabled(false)}>Edit</button>${button('set-lineup-question', question.enabled ? 'Disable headline' : 'Enable headline', false, 'secondary small', { questionId: question.id, enabled: !question.enabled })}</div></article>`).join('')}</div>
+      <p class="small-text">Two photos side by side, three across, four in a 2×2 grid, on every screen. Disabling any photo skips all headlines using it. Edits affect future rounds only. Libraries survive new events.</p>
+      </details></section>`;
   }
 
   function screengrabberRoundView() {
@@ -481,7 +617,7 @@
       <label class="field">Still image (JPEG, PNG or WebP; up to 5 MB)<input id="${prefix}-file" type="file" accept="image/jpeg,image/png,image/webp"></label>
       <p id="${prefix}-selected-name" class="small-text">${draft.file ? `Selected: ${escape(draft.file.name)}` : 'No image selected.'}</p>
       <label class="field">Private library title<input id="${prefix}-title" maxlength="80" required value="${escape(draft.title)}"></label>
-      <label class="field">Image description for accessibility${prefix === 'screengrabber-image' ? ' (do not give away the answer)' : ''}<input id="${prefix}-alt" maxlength="240" required value="${escape(draft.alt)}"></label>
+      <label class="field">Image description for accessibility${prefix === 'screengrabber-image' || prefix === 'lineup-image' ? ' (do not give away the answer)' : ''}<input id="${prefix}-alt" maxlength="240" required value="${escape(draft.alt)}"></label>
       <label class="field">Credit / source<input id="${prefix}-credit" maxlength="160" required value="${escape(draft.credit)}"></label>
       <label class="check"><input id="${prefix}-permission" type="checkbox" required${draft.permission ? ' checked' : ''}><span>I have permission to use this image and have checked that it suits this audience.</span></label>
       <button${disabled(false)}>Upload to this game’s album</button></form>`;
@@ -613,6 +749,7 @@
     let mainContent = '';
     if (state.event?.status === 'ended') mainContent = finale();
     else if (game?.status === 'ended') mainContent = gameFinal();
+    else if (isLineup()) mainContent = lineupRoundView();
     else if (isScreengrabbers()) mainContent = screengrabberRoundView();
     else if (isPicture()) mainContent = pictureRoundView();
     else if (isCards()) mainContent = cardRoundView();
@@ -621,20 +758,29 @@
     else mainContent = `<section class="card waiting"><span class="waiting-icon" aria-hidden="true">🎬</span><h2>${game ? 'Ready for round one?' : activeEvent ? 'Your event is open!' : 'Let’s get this show started.'}</h2><p>${activeEvent ? 'Welcome your guests, choose a game, then start a round.' : 'Open a new event to welcome guests.'}</p></section>`;
     const pictureControls = `<form id="picture-game-form"><label class="field">Get The Picture format<select id="picture-mode"${disabled(!canStartGame)}>${[['small', 'Small room — all accepted captions'], ['large', 'Large audience — host-approved captions'], ['poolside', 'Poolside — rotating group judges']].map(([value, label]) => `<option value="${value}"${pictureModeChoice === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button${disabled(!canStartGame)}>Start Get The Picture</button></form>
       ${isPicture() ? `<label class="field">Next round’s image<select id="picture-image"><option value="">Random unused image</option>${state.pictureImages.filter(image => image.enabled).map(image => `<option value="${image.id}"${pictureImageChoice === image.id ? ' selected' : ''}>${escape(image.title)}</option>`).join('')}</select></label>` : ''}`;
-    const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-game', 'Start Screengrabbers', !canStartGame, '', { type: 'screengrabbers' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() || isScreengrabbers() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isScreengrabbers() ? 'Screengrabbers needs 2–100 connected players and an enabled saved question. Start a round, check image readiness, then open the curtain.' : isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">All events are limited to 100 registered players. Family Cards includes toilet humor and dark themes; start it at the host’s discretion.</p></section>`;
-    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${screengrabberLibraryView()}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
+    const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-game', 'Start Screengrabbers', !canStartGame, '', { type: 'screengrabbers' })}${button('start-game', 'Start Lineup', !canStartGame, '', { type: 'lineup' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() || isScreengrabbers() || isLineup() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isLineup() ? 'Lineup needs 2–100 connected players and an enabled headline with 2–4 photos. Check that every photo has loaded, then publish the headline.' : isScreengrabbers() ? 'Screengrabbers needs 2–100 connected players and an enabled saved question. Start a round, check image readiness, then open the curtain.' : isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">All events are limited to 100 registered players. Family Cards includes toilet humor and dark themes; start it at the host’s discretion.</p></section>`;
+    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${lineupLibraryView()}${screengrabberLibraryView()}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
   }
 
   function gameFinal() {
+    if (isLineup()) return lineupFinal(false);
     if (isScreengrabbers()) return cinemaCredits(false);
     return `${heading('What a game!', state.event?.mode === 'variety' ? 'Keep those smiles. The host will choose the next game.' : 'Thanks for playing!', `${gameTitle()} · final standings`)}<div class="grid split">${leaderboard('game', `Our ${gameTitle()} stars`, 3)}${leaderboard('event', 'The show so far', 5)}</div>`;
   }
 
   function finale() {
+    if (isLineup()) return lineupFinal(true);
     if (isScreengrabbers()) return cinemaCredits(true);
     return `<section class="finale"><span class="eyebrow">${escape(state.event?.title || 'The Big Draw')} · That’s a wrap</span>
       <svg class="finale-art" viewBox="0 0 660 260" role="img" aria-label="Two stick figures drawn in black pen, followed by a red heart"><rect width="660" height="260" fill="white"/><g stroke="#111111" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"><g class="figure"><circle class="ink head" pathLength="1" cx="210" cy="72" r="25"/><path class="ink body" pathLength="1" d="M210 98V171M210 117L167 97L147 61M210 117L250 98L272 65M210 171L177 222M210 171L241 220"/><path class="ink smile" pathLength="1" d="M202 76Q210 84 218 76" stroke-width="3"/></g><g class="figure second"><circle class="ink head" pathLength="1" cx="450" cy="72" r="25"/><path class="ink body" pathLength="1" d="M450 98V171M450 117L409 98L387 65M450 117L490 96L511 58M450 171L418 221M450 171L483 220"/><path class="ink smile" pathLength="1" d="M442 76Q450 84 458 76" stroke-width="3"/></g><path class="ink heart" pathLength="1" d="M330 118C269 77 291 29 330 60C369 29 391 77 330 118Z" stroke="#e83250" stroke-width="7"/></g></svg>
       <h1>Thank You For Playing</h1><p>The art was one of a kind. So were you.</p><div class="final-standings">${leaderboard('event', 'Our event stars', 3)}</div></section>`;
+  }
+
+  function lineupFinal(eventFinal) {
+    return `<section class="finale lineup-magazine"><span class="lineup-masthead">LINEUP</span><span class="eyebrow">${escape(state.event?.title)} · Final edition</span>
+      <h1>You made headlines!</h1><p>Thanks for playing. These are tonight’s cover stars.</p>
+      <div class="final-standings">${leaderboard(eventFinal ? 'event' : 'game', 'The cover stars', 3)}</div>
+      ${!eventFinal ? `<p>The host will choose the next game. Your Silly Name and event points stay with you.</p>${leaderboard('event', 'The show so far')}` : ''}</section>`;
   }
 
   function cinemaCredits(eventFinal) {
@@ -685,6 +831,10 @@
       if (action === 'save-screengrabber-question') {
         questionDraft = { questionId: '', imageId: data.imageId, prompt: '', options: ['', '', '', ''], correctChoice: '' };
         notify('Question saved to the Screengrabbers library.');
+      }
+      if (action === 'save-lineup-question') {
+        lineupDraft = newLineupDraft();
+        notify('Headline saved to the Lineup library.');
       }
       if (result?.serverTime) receive(result); else await refresh();
       // A socket opened before login carries the old role until it is reconnected.
@@ -752,7 +902,123 @@
     });
   }
 
+  function positionLineupPhotos() {
+    app.querySelectorAll('[data-lineup-x]').forEach(image => {
+      image.style.objectPosition = `${Number(image.dataset.lineupX)}% ${Number(image.dataset.lineupY)}%`;
+    });
+  }
+
+  function bindLineupPreview() {
+    positionLineupPhotos();
+    document.getElementById('lineup-mobile-preview')?.addEventListener('toggle', event => {
+      lineupMobilePreviewOpen = event.target.open;
+    });
+    app.querySelectorAll('[data-lineup-correct]').forEach(element => element.addEventListener('click', () => {
+      if (busy) return;
+      lineupDraft.correctChoice = Number(element.dataset.lineupCorrect);
+      render(true);
+    }));
+  }
+
+  function updateLineupPreview() {
+    const preview = document.getElementById('lineup-draft-preview');
+    if (!preview) return;
+    const mobileOpen = preview.querySelector('details')?.open;
+    preview.innerHTML = lineupDraftPreview();
+    preview.querySelector('details').open = Boolean(mobileOpen);
+    bindLineupPreview();
+  }
+
+  function bindLineup() {
+    bindImageUpload('lineup-image', 'lineup-images', lineupUploadDraft);
+    document.getElementById('lineup-library')?.addEventListener('toggle', event => { lineupLibraryOpen = event.target.open; });
+    for (const field of ['prompt', 'revealName', 'explanation']) {
+      document.getElementById(`lineup-${field}`)?.addEventListener('input', event => {
+        lineupDraft[field] = event.target.value;
+        updateLineupPreview();
+      });
+    }
+    app.querySelectorAll('[data-lineup-image-choice]').forEach(element => element.addEventListener('change', () => {
+      const index = Number(element.dataset.lineupImageChoice);
+      lineupDraft.choices[index] = { imageId: element.value, x: 50, y: 50 };
+      render(true);
+    }));
+    app.querySelectorAll('[data-lineup-position]').forEach(element => element.addEventListener('input', () => {
+      lineupDraft.choices[Number(element.dataset.lineupPosition)][element.dataset.axis] = Number(element.value);
+      updateLineupPreview();
+    }));
+    app.querySelectorAll('[data-lineup-editor]').forEach(element => element.addEventListener('click', () => {
+      if (busy) return;
+      if (element.dataset.lineupEditor === 'add' && lineupDraft.choices.length < 4) {
+        lineupDraft.choices.push({ imageId: '', x: 50, y: 50 });
+      }
+      if (element.dataset.lineupEditor === 'remove' && lineupDraft.choices.length > 2) {
+        lineupDraft.choices.pop();
+        if (lineupDraft.correctChoice >= lineupDraft.choices.length) lineupDraft.correctChoice = null;
+      }
+      if (element.dataset.lineupEditor === 'new') lineupDraft = newLineupDraft();
+      render(true);
+    }));
+    app.querySelectorAll('[data-lineup-edit]').forEach(element => element.addEventListener('click', () => {
+      if (busy) return;
+      const question = state.lineupQuestions.find(item => item.id === element.dataset.lineupEdit);
+      lineupDraft = { ...structuredClone(question), questionId: question.id };
+      render(true);
+      document.getElementById('lineup-prompt').focus();
+    }));
+    document.getElementById('lineup-question-form')?.addEventListener('submit', event => {
+      event.preventDefault();
+      command('save-lineup-question', lineupDraft);
+    });
+    bindLineupPreview();
+    app.querySelectorAll('[data-lineup-select]').forEach(element => element.addEventListener('click', () => {
+      if (busy || !state.me?.canSubmit || timeLeft(state.round.deadline) <= 0) return;
+      lineupSelection = Number(element.dataset.lineupSelect);
+      render(true);
+      app.querySelector(`[data-lineup-select="${lineupSelection}"]`)?.focus({ preventScroll: true });
+    }));
+    app.querySelectorAll('[data-lineup-zoom]').forEach(element => element.addEventListener('click', () => {
+      const index = Number(element.dataset.lineupZoom);
+      const image = state.round.images[index];
+      photoDialog.innerHTML = `<h2>Photo ${index + 1} — full image</h2><p>Preview only. This does not select or submit an answer. The timer keeps running.</p><img src="${escape(image.url)}" alt="${escape(image.alt)}"><p class="picture-error" hidden>Photo could not load. Close this preview and use Retry photos.</p><button type="button">Close preview</button>`;
+      photoDialog.setAttribute('aria-label', `Full image preview for photo ${index + 1}`);
+      photoDialog.querySelector('button').addEventListener('click', () => photoDialog.close());
+      photoDialog.querySelector('img').addEventListener('error', () => { photoDialog.querySelector('.picture-error').hidden = false; });
+      photoDialog.showModal();
+    }));
+    const photos = [...app.querySelectorAll('[data-lineup-round]')];
+    if (!photos.length) return;
+    const roundId = state.round.id;
+    const loaded = async () => {
+      if (!photos.every(image => image.isConnected && image.complete && image.naturalWidth > 0) || state.round?.id !== roundId) return;
+      loadedPictures.add(roundId);
+      const start = app.querySelector('[data-action="start-lineup-timer"]');
+      if (start) start.disabled = busy || state.round.stage !== 'loading';
+      document.getElementById('lineup-image-error').hidden = true;
+      if (page !== 'player' || !state.me?.participant || state.me.imageReady || readyReports.has(roundId)) return;
+      readyReports.add(roundId);
+      try { await socketCommand('lineup-ready', { roundId }); }
+      catch (error) { readyReports.delete(roundId); notify(`Cannot confirm photo readiness: ${error.message}`); }
+    };
+    const failed = () => {
+      loadedPictures.delete(roundId);
+      document.getElementById('lineup-image-error').hidden = false;
+      const start = app.querySelector('[data-action="start-lineup-timer"]');
+      if (start) start.disabled = true;
+    };
+    for (const photo of photos) {
+      photo.onload = loaded;
+      photo.onerror = failed;
+      if (photo.complete && !photo.naturalWidth) failed();
+    }
+    loaded();
+    document.getElementById('lineup-retry')?.addEventListener('click', () => {
+      for (const photo of photos) photo.src = photo.getAttribute('src');
+    });
+  }
+
   function bind() {
+    bindLineup();
     app.querySelectorAll('[data-action]').forEach(element => element.addEventListener('click', () => command(element.dataset.action, JSON.parse(element.dataset.payload))));
     app.querySelectorAll('.qr-card img').forEach(image => image.addEventListener('error', () => {
       image.hidden = true;
@@ -1055,6 +1321,10 @@
     });
     app.querySelectorAll('button.cinema-ticket').forEach(element => {
       element.disabled = busy || state.round?.stage !== 'answering' || !state.me?.canSubmit || timeLeft(state.round.deadline) <= 0;
+    });
+    app.querySelectorAll('[data-lineup-select], [data-action="submit-lineup-answer"]').forEach(element => {
+      element.disabled = busy || !state.me?.canSubmit || state.round?.stage !== 'answering' ||
+        timeLeft(state.round.deadline) <= 0 || (element.dataset.action === 'submit-lineup-answer' && !Number.isInteger(lineupSelection));
     });
     updateDrawControls();
   }
