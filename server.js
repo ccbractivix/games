@@ -275,6 +275,7 @@ async function createApplication({ env = process.env, store: suppliedStore, timi
 
   app.use('/shared', express.static(path.join(__dirname, 'shared')));
   app.get('/host', (_request, response) => response.sendFile(path.join(__dirname, 'public/host.html')));
+  app.get('/manager', (_request, response) => response.sendFile(path.join(__dirname, 'public/manager.html')));
   app.get('/display', (_request, response) => response.sendFile(path.join(__dirname, 'public/display.html')));
   app.use(express.static(path.join(__dirname, 'public')));
   app.use((error, _request, response, _next) => {

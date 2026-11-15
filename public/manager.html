@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6751e8">
+  <title>Game manager · Resort Games</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E✏️%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-page="manager">
+  <header class="site-header"><a class="brand" href="/manager"><span class="brand-icon" aria-hidden="true">✎</span><span class="brand-name">Resort Games</span><span class="brand-tag">game manager</span></a><span id="connection" class="connection" role="status">Connecting…</span></header>
+  <main id="app" aria-busy="true"><section class="card loading"><h1>Opening the manager…</h1></section></main>
+  <div id="notice" class="notice" role="alert" hidden></div>
+  <dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title"></h2><p id="dialog-description"></p><div id="dialog-actions" class="actions"></div></dialog>
+  <footer class="site-footer">Keep game libraries and answers private. Project only the audience display.<a href="/host">Open host studio</a></footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>

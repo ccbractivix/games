@@ -42,6 +42,8 @@
   let lineupLibraryOpen = false;
   let lineupMobilePreviewOpen = false;
   let lineupSelection = null;
+  const managerDirty = { pictureUpload: false, screengrabberUpload: false, lineupUpload: false,
+    policy: false, question: false, lineup: false };
   const photoDialog = document.createElement('dialog');
   photoDialog.className = 'lineup-photo-dialog';
   document.body.append(photoDialog);
@@ -59,6 +61,12 @@
   const disabled = condition => condition || busy ? ' disabled' : '';
   const button = (action, label, condition = false, style = '', data = {}) => `<button type="button" class="${style}" data-action="${action}" data-payload="${escape(JSON.stringify(data))}"${disabled(condition)}>${label}</button>`;
   const timer = deadline => deadline ? `<span class="timer" data-deadline="${deadline}" aria-label="Time remaining">◷ <span>${timeLeft(deadline)}s</span></span>` : '';
+
+  window.addEventListener('beforeunload', event => {
+    if (page !== 'manager' || !Object.values(managerDirty).some(Boolean)) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   function notify(message, sticky = false) {
     clearTimeout(noticeTimer);
@@ -179,15 +187,15 @@
     if (isHost() && pictureImageChoice && !state.pictureImages.some(image => image.id === pictureImageChoice && image.enabled)) {
       pictureImageChoice = '';
     }
-    const title = isLineup() ? 'Lineup' : isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
+    const title = page === 'manager' ? 'Resort Games' : isLineup() ? 'Lineup' : isScreengrabbers() ? 'Screengrabbers' : isPicture() ? 'Get The Picture' : isCards() ? 'Family Cards' : 'The Big Draw';
     document.querySelector('.brand-name').textContent = title;
-    document.querySelector('.brand-icon').textContent = isLineup() ? 'L' : isScreengrabbers() ? '▶' : isPicture() ? '▣' : isCards() ? '5' : '✎';
-    document.body.classList.toggle('screengrabbers', isScreengrabbers());
-    document.body.classList.toggle('lineup', isLineup());
+    document.querySelector('.brand-icon').textContent = page === 'manager' ? '✎' : isLineup() ? 'L' : isScreengrabbers() ? '▶' : isPicture() ? '▣' : isCards() ? '5' : '✎';
+    document.body.classList.toggle('screengrabbers', page !== 'manager' && isScreengrabbers());
+    document.body.classList.toggle('lineup', page !== 'manager' && isLineup());
     if (previous?.round?.id !== next.round?.id || previous?.round?.stage !== next.round?.stage || !isLineup()) {
       photoDialog.close();
     }
-    document.title = `${page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${title}`;
+    document.title = `${page === 'manager' ? 'Game manager' : page === 'host' ? 'Host studio' : page === 'player' ? 'Guest play' : 'Big screen'} · ${title}`;
     offset = next.serverTime - Date.now();
     if (previous?.round?.id !== next.round?.id || previous?.me?.artistSlot !== next.me?.artistSlot) {
       draft = null;
@@ -229,6 +237,7 @@
       .map(image => [image.getAttribute('src'), image]));
     app.removeAttribute('aria-busy');
     if (page === 'host') app.innerHTML = isHost() ? hostView() : loginView();
+    else if (page === 'manager') app.innerHTML = state.role === 'host' ? managerView() : loginView();
     else if (page === 'player') app.innerHTML = state.me ? playerView() : joinView();
     else app.innerHTML = displayView();
     if (isScreengrabbers() && state.round?.stage === 'answering' &&
@@ -308,6 +317,8 @@
   }
 
   function loginView() {
+    if (page === 'manager') return `${heading('Prepare the games.', 'Build and maintain your game libraries before or during an event.', 'Game manager')}
+      <section class="card loading"><h2>Open the game manager</h2><form id="login-form"><label class="field">Host password<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label><button class="full"${disabled(false)}>Sign in securely →</button></form><p class="small-text center">The manager and host studio use the same password and permissions. Keep both private.</p></section>`;
     return `${heading('Hello, party starter.', 'Your private studio: pick artists, review doodles, and run the show.', 'Host access')}
       <section class="card loading"><h2>Open the host studio</h2><form id="login-form"><label class="field">Host password<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label><button class="full"${disabled(false)}>Sign in securely →</button></form><p class="small-text center">Keep this screen private. Open /display for the audience.</p></section>`;
   }
@@ -759,7 +770,14 @@
     const pictureControls = `<form id="picture-game-form"><label class="field">Get The Picture format<select id="picture-mode"${disabled(!canStartGame)}>${[['small', 'Small room — all accepted captions'], ['large', 'Large audience — host-approved captions'], ['poolside', 'Poolside — rotating group judges']].map(([value, label]) => `<option value="${value}"${pictureModeChoice === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button${disabled(!canStartGame)}>Start Get The Picture</button></form>
       ${isPicture() ? `<label class="field">Next round’s image<select id="picture-image"><option value="">Random unused image</option>${state.pictureImages.filter(image => image.enabled).map(image => `<option value="${image.id}"${pictureImageChoice === image.id ? ' selected' : ''}>${escape(image.title)}</option>`).join('')}</select></label>` : ''}`;
     const controls = `<section class="card"><h2>Run the show</h2>${pictureControls}<div class="actions">${button('start-game', 'Start Big Draw', !canStartGame, '', { type: 'pictionary' })}${button('start-game', 'Start Family Cards', !canStartGame, '', { type: 'family-cards' })}${button('start-game', 'Start Screengrabbers', !canStartGame, '', { type: 'screengrabbers' })}${button('start-game', 'Start Lineup', !canStartGame, '', { type: 'lineup' })}${button('start-round', 'Start a new round', !activeEvent || !activeGame || !roundDone || !(isCards() || isPicture() || isScreengrabbers() || isLineup() ? enoughPlayers : enoughArtists))}${button('scoreboard', 'Show scoreboard', !game || !!liveRound, 'secondary')}${button('end-game', 'Conclude game…', !activeGame || !!liveRound, 'secondary')}${button('end-event', 'Conclude event…', !activeEvent || !!liveRound, 'secondary')}</div><p class="small-text">${isLineup() ? 'Lineup needs 2–100 connected players and an enabled headline with 2–4 photos. Check that every photo has loaded, then publish the headline.' : isScreengrabbers() ? 'Screengrabbers needs 2–100 connected players and an enabled saved question. Start a round, check image readiness, then open the curtain.' : isPicture() ? 'Get The Picture supports 2–100 players. Start a round to preload the image, then start the caption timer.' : isCards() ? 'Family Cards needs at least two online players; drawing volunteers are not required.' : 'Big Draw needs at least two online drawing volunteers.'} ${state.event?.mode === 'variety' ? 'Next games keep this event’s registrations and cumulative scores.' : 'Concluding a standalone game also concludes the event.'}</p><p class="small-text">All events are limited to 100 registered players. Family Cards includes toilet humor and dark themes; start it at the host’s discretion.</p></section>`;
-    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<div class="grid host-layout"><div class="stack">${mainContent}${controls}${lineupLibraryView()}${screengrabberLibraryView()}${pictureLibraryView()}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
+    return `${heading(state.event?.title || 'Your party. Your studio.', 'Private controls for a very public good time.', 'Host studio')}<p><a href="/manager">Manage game libraries →</a></p><div class="grid host-layout"><div class="stack">${mainContent}${controls}<div class="grid split">${leaderboard('game', 'Game points')}${leaderboard('event', 'Event points')}</div></div><aside class="stack host-sidebar">${qrCard()}${roster(true)}${newEventForm()}<section class="card"><div class="actions"><a href="/display" target="_blank" rel="noopener">Open audience display ↗</a>${button('logout', 'Sign out', false, 'secondary small')}</div></section></aside></div>`;
+  }
+
+  function managerView() {
+    return `${heading('Game manager', 'Prepare images, questions, headlines and safety settings. Your libraries are available across events.', 'Private workspace')}
+      <section class="card"><div class="actions"><a href="/host">Open host studio</a>${button('logout', 'Sign out', false, 'secondary small')}</div>
+      <p class="small-text">The host studio and manager share the same login and permissions. Library changes affect future rounds; safety additions apply to subsequent captions.</p></section>
+      ${pictureLibraryView()}${lineupLibraryView()}${screengrabberLibraryView()}`;
   }
 
   function gameFinal() {
@@ -810,6 +828,23 @@
     });
   }
 
+  async function discardEditorDraft(editor) {
+    if (!managerDirty[editor]) return true;
+    return Boolean(await confirmChoice('Discard unsaved changes?', 'Your current editor changes have not been saved.',
+      [{ label: 'Keep editing', value: false, style: 'secondary' }, { label: 'Discard changes', value: true, style: 'danger' }]));
+  }
+
+  function clearManagerDrafts() {
+    Object.assign(managerDirty, { pictureUpload: false, screengrabberUpload: false, lineupUpload: false,
+      policy: false, question: false, lineup: false });
+    for (const upload of [uploadDraft, screengrabberUploadDraft, lineupUploadDraft]) {
+      Object.assign(upload, { file: null, title: '', alt: '', credit: '', permission: false });
+    }
+    policyDraft = null;
+    questionDraft = { questionId: '', imageId: '', prompt: '', options: ['', '', '', ''], correctChoice: '' };
+    lineupDraft = newLineupDraft();
+  }
+
   async function command(action, data = {}) {
     if (busy) return;
     if (action === 'start-round' && isPicture() && pictureImageChoice) data = { ...data, imageId: pictureImageChoice };
@@ -819,7 +854,7 @@
     }
     if (['end-game', 'end-event', 'cancel-round', 'logout'].includes(action)) {
       const choice = await confirmChoice(action === 'logout' ? 'Sign out of the studio?' : action === 'cancel-round' ? 'Cancel this round?' : `Conclude this ${action === 'end-event' ? 'event' : 'game'}?`,
-        action === 'cancel-round' ? 'This round will stop. You can start a fresh round next.' : action === 'logout' ? 'The game keeps running. You can sign in again at any time.' : 'Standings will be finalized. A tied lead will give you the option of another round.',
+        action === 'cancel-round' ? 'This round will stop. You can start a fresh round next.' : action === 'logout' ? `The game keeps running. You can sign in again at any time.${Object.values(managerDirty).some(Boolean) ? ' Unsaved manager changes will be discarded.' : ''}` : 'Standings will be finalized. A tied lead will give you the option of another round.',
         [{ label: 'Go back', value: false, style: 'secondary' }, { label: action === 'logout' ? 'Sign out' : 'Continue', value: true }]);
       if (!choice) return;
     }
@@ -827,13 +862,16 @@
     render(true);
     try {
       const result = action === 'logout' ? await api('/api/host/logout', {}) : await api('/api/command', { action, data });
-      if (action === 'set-picture-policy') policyDraft = null;
+      if (action === 'logout') clearManagerDrafts();
+      if (action === 'set-picture-policy') { policyDraft = null; managerDirty.policy = false; }
       if (action === 'save-screengrabber-question') {
         questionDraft = { questionId: '', imageId: data.imageId, prompt: '', options: ['', '', '', ''], correctChoice: '' };
+        managerDirty.question = false;
         notify('Question saved to the Screengrabbers library.');
       }
       if (action === 'save-lineup-question') {
         lineupDraft = newLineupDraft();
+        managerDirty.lineup = false;
         notify('Headline saved to the Lineup library.');
       }
       if (result?.serverTime) receive(result); else await refresh();
@@ -869,15 +907,16 @@
     finally { busy = false; render(true); }
   }
 
-  function bindImageUpload(prefix, route, draft) {
+  function bindImageUpload(prefix, route, draft, dirtyKey) {
     document.getElementById(`${prefix}-file`)?.addEventListener('change', event => {
       draft.file = event.target.files[0] || null;
+      managerDirty[dirtyKey] = true;
       document.getElementById(`${prefix}-selected-name`).textContent = draft.file ? `Selected: ${draft.file.name}` : 'No image selected.';
     });
     for (const field of ['title', 'alt', 'credit']) {
-      document.getElementById(`${prefix}-${field}`)?.addEventListener('input', event => { draft[field] = event.target.value; });
+      document.getElementById(`${prefix}-${field}`)?.addEventListener('input', event => { draft[field] = event.target.value; managerDirty[dirtyKey] = true; });
     }
-    document.getElementById(`${prefix}-permission`)?.addEventListener('change', event => { draft.permission = event.target.checked; });
+    document.getElementById(`${prefix}-permission`)?.addEventListener('change', event => { draft.permission = event.target.checked; managerDirty[dirtyKey] = true; });
     document.getElementById(`${prefix}-upload-form`)?.addEventListener('submit', async event => {
       event.preventDefault();
       if (busy) return;
@@ -894,6 +933,7 @@
       try {
         const next = await api(`/api/${route}?${query}`, file, file.type);
         Object.assign(draft, { file: null, title: '', alt: '', credit: '', permission: false });
+        managerDirty[dirtyKey] = false;
         if (route === 'screengrabber-images' && !questionDraft.imageId) questionDraft.imageId = next.screengrabberImages.at(-1).id;
         receive(next);
         notify('Image uploaded to this game’s album.');
@@ -916,6 +956,7 @@
     app.querySelectorAll('[data-lineup-correct]').forEach(element => element.addEventListener('click', () => {
       if (busy) return;
       lineupDraft.correctChoice = Number(element.dataset.lineupCorrect);
+      managerDirty.lineup = true;
       render(true);
     }));
   }
@@ -930,25 +971,29 @@
   }
 
   function bindLineup() {
-    bindImageUpload('lineup-image', 'lineup-images', lineupUploadDraft);
+    bindImageUpload('lineup-image', 'lineup-images', lineupUploadDraft, 'lineupUpload');
     document.getElementById('lineup-library')?.addEventListener('toggle', event => { lineupLibraryOpen = event.target.open; });
     for (const field of ['prompt', 'revealName', 'explanation']) {
       document.getElementById(`lineup-${field}`)?.addEventListener('input', event => {
         lineupDraft[field] = event.target.value;
+        managerDirty.lineup = true;
         updateLineupPreview();
       });
     }
     app.querySelectorAll('[data-lineup-image-choice]').forEach(element => element.addEventListener('change', () => {
       const index = Number(element.dataset.lineupImageChoice);
       lineupDraft.choices[index] = { imageId: element.value, x: 50, y: 50 };
+      managerDirty.lineup = true;
       render(true);
     }));
     app.querySelectorAll('[data-lineup-position]').forEach(element => element.addEventListener('input', () => {
       lineupDraft.choices[Number(element.dataset.lineupPosition)][element.dataset.axis] = Number(element.value);
+      managerDirty.lineup = true;
       updateLineupPreview();
     }));
-    app.querySelectorAll('[data-lineup-editor]').forEach(element => element.addEventListener('click', () => {
+    app.querySelectorAll('[data-lineup-editor]').forEach(element => element.addEventListener('click', async () => {
       if (busy) return;
+      if (element.dataset.lineupEditor === 'new' && !await discardEditorDraft('lineup')) return;
       if (element.dataset.lineupEditor === 'add' && lineupDraft.choices.length < 4) {
         lineupDraft.choices.push({ imageId: '', x: 50, y: 50 });
       }
@@ -956,13 +1001,15 @@
         lineupDraft.choices.pop();
         if (lineupDraft.correctChoice >= lineupDraft.choices.length) lineupDraft.correctChoice = null;
       }
-      if (element.dataset.lineupEditor === 'new') lineupDraft = newLineupDraft();
+      if (element.dataset.lineupEditor === 'new') { lineupDraft = newLineupDraft(); managerDirty.lineup = false; }
+      else managerDirty.lineup = true;
       render(true);
     }));
-    app.querySelectorAll('[data-lineup-edit]').forEach(element => element.addEventListener('click', () => {
-      if (busy) return;
+    app.querySelectorAll('[data-lineup-edit]').forEach(element => element.addEventListener('click', async () => {
+      if (busy || !await discardEditorDraft('lineup')) return;
       const question = state.lineupQuestions.find(item => item.id === element.dataset.lineupEdit);
       lineupDraft = { ...structuredClone(question), questionId: question.id };
+      managerDirty.lineup = false;
       render(true);
       document.getElementById('lineup-prompt').focus();
     }));
@@ -1038,22 +1085,24 @@
       command('submit-caption', { text: document.getElementById('caption').value });
     });
     document.getElementById('picture-library')?.addEventListener('toggle', event => { imageManagerOpen = event.target.open; });
-    document.getElementById('picture-policy')?.addEventListener('input', event => { policyDraft = event.target.value; });
+    document.getElementById('picture-policy')?.addEventListener('input', event => { policyDraft = event.target.value; managerDirty.policy = true; });
     document.getElementById('picture-policy-form')?.addEventListener('submit', event => {
       event.preventDefault();
       command('set-picture-policy', { terms: document.getElementById('picture-policy').value });
     });
-    bindImageUpload('image', 'picture-images', uploadDraft);
-    bindImageUpload('screengrabber-image', 'screengrabber-images', screengrabberUploadDraft);
+    bindImageUpload('image', 'picture-images', uploadDraft, 'pictureUpload');
+    bindImageUpload('screengrabber-image', 'screengrabber-images', screengrabberUploadDraft, 'screengrabberUpload');
     document.getElementById('screengrabber-library')?.addEventListener('toggle', event => { screengrabberLibraryOpen = event.target.open; });
-    document.getElementById('screengrabber-question-image')?.addEventListener('change', event => { questionDraft.imageId = event.target.value; });
-    document.getElementById('screengrabber-prompt')?.addEventListener('input', event => { questionDraft.prompt = event.target.value; });
-    document.getElementById('screengrabber-correct')?.addEventListener('change', event => { questionDraft.correctChoice = event.target.value; });
+    document.getElementById('screengrabber-question-image')?.addEventListener('change', event => { questionDraft.imageId = event.target.value; managerDirty.question = true; });
+    document.getElementById('screengrabber-prompt')?.addEventListener('input', event => { questionDraft.prompt = event.target.value; managerDirty.question = true; });
+    document.getElementById('screengrabber-correct')?.addEventListener('change', event => { questionDraft.correctChoice = event.target.value; managerDirty.question = true; });
     app.querySelectorAll('[data-question-option]').forEach(field => field.addEventListener('input', event => {
       questionDraft.options[Number(field.dataset.questionOption)] = event.target.value;
+      managerDirty.question = true;
     }));
-    app.querySelectorAll('[data-question-editor]').forEach(element => element.addEventListener('click', () => {
+    app.querySelectorAll('[data-question-editor]').forEach(element => element.addEventListener('click', async () => {
       if (busy) return;
+      if (element.dataset.questionEditor === 'new' && !await discardEditorDraft('question')) return;
       if (element.dataset.questionEditor === 'add' && questionDraft.options.length < 6) questionDraft.options.push('');
       if (element.dataset.questionEditor === 'remove' && questionDraft.options.length > 2) {
         questionDraft.options.pop();
@@ -1061,14 +1110,17 @@
       }
       if (element.dataset.questionEditor === 'new') {
         questionDraft = { questionId: '', imageId: questionDraft.imageId, prompt: '', options: ['', '', '', ''], correctChoice: '' };
+        managerDirty.question = false;
       }
+      else managerDirty.question = true;
       render(true);
     }));
-    app.querySelectorAll('[data-edit-question]').forEach(element => element.addEventListener('click', () => {
-      if (busy) return;
+    app.querySelectorAll('[data-edit-question]').forEach(element => element.addEventListener('click', async () => {
+      if (busy || !await discardEditorDraft('question')) return;
       const question = state.screengrabberQuestions.find(item => item.id === element.dataset.editQuestion);
       questionDraft = { questionId: question.id, imageId: question.imageId, prompt: question.prompt,
         options: [...question.options], correctChoice: String(question.correctChoice) };
+      managerDirty.question = false;
       render(true);
       document.getElementById('screengrabber-prompt').focus();
     }));
