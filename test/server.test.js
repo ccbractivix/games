@@ -59,6 +59,26 @@ test('host protection, same-origin enforcement, joins, privacy and QR endpoint',
   assert.match(await qr.text(), /<svg/);
 });
 
+test('manager uses the existing host session and persistent library data', async t => {
+  const { base, post } = await service(t);
+  const manager = await fetch(`${base}/manager`);
+  assert.equal(manager.status, 200);
+  assert.match(await manager.text(), /data-page="manager"/);
+  const publicState = await (await fetch(`${base}/api/state`)).json();
+  assert.equal(publicState.role, 'display');
+  assert.equal(Object.hasOwn(publicState, 'pictureBlockedTerms'), false);
+  assert.notEqual((await post('/api/command', { action: 'set-picture-policy', data: { terms: 'private phrase' } })).status, 200);
+
+  const { cookie } = await post('/api/host/login', { password: ENV.HOST_PASSWORD });
+  assert.equal((await post('/api/command', { action: 'set-picture-policy', data: { terms: 'private phrase' } }, cookie)).status, 200);
+  assert.equal((await post('/api/command', { action: 'new-event', data: { mode: 'variety' } }, cookie)).status, 200);
+  const hostState = await (await fetch(`${base}/api/state`, { headers: { Cookie: cookie } })).json();
+  assert.equal(hostState.role, 'host');
+  assert.deepEqual(hostState.pictureBlockedTerms, ['private phrase']);
+  const displayState = await (await fetch(`${base}/api/state?display=1`, { headers: { Cookie: cookie } })).json();
+  assert.equal(Object.hasOwn(displayState, 'pictureBlockedTerms'), false);
+});
+
 test('60 connected phones accept exactly five card answers, vote anonymously and persist ranked event points', { timeout: 20000 }, async t => {
   const { engine, transact, post, base, snapshots } = await service(t, {
     timing: { submissions: 60000, voting: 60000 },

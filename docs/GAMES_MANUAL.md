@@ -4,7 +4,7 @@ This manual covers the standalone Resort Games service. It is not part of RGP an
 
 ## What runs where
 
-- **Render web service:** Serves the guest application, `/host`, `/display`, WebSocket connections, and the QR endpoint (`GET /api/qr`).
+- **Render web service:** Serves the guest application, `/manager`, `/host`, `/display`, WebSocket connections, and the QR endpoint (`GET /api/qr`).
 - **Render PostgreSQL:** Stores the current event snapshot and persistent game libraries as one JSONB row. The application creates its schema automatically, including Screengrabbers question storage; operators do not need to create tables or write SQL.
 - **GitHub:** Holds the source and `render.yaml` deployment blueprint.
 - **Cloudflare R2 (optional):** Holds uploaded Get The Picture, Screengrabbers and Lineup images in a dedicated private games bucket. Each game has its own object prefix and host library. Render uploads optimized images; phones and the display read them through temporary signed links. Questions, correct answers, captions, scores and image metadata stay in the database, not public bucket listings.
@@ -52,7 +52,7 @@ The repository includes a Render Blueprint, `render.yaml`. It defines a Node web
 8. Apply/create the Blueprint. In the service's **Environment** page, confirm `NODE_ENV=production`, `DATABASE_SSL=false`, the generated `SESSION_SECRET`, and `HOST_PASSWORD` are present. Confirm `DATABASE_URL` is sourced from `resort-games-db` using its `connectionString` property. In service **Settings**, confirm there is exactly one instance, autoscaling is off, and automatic deploy is disabled. Do not paste the database URL into GitHub or a public document.
 9. Save any environment changes and deploy the latest commit from the service's **Manual Deploy** menu if Render has not deployed it automatically.
 10. Wait for the build and deploy to finish. Open the service's **Logs** if it fails; resolve missing package files, invalid credentials, or database connectivity before directing guests to it.
-11. In the service **Settings**, copy the assigned `onrender.com` URL and open it over HTTPS. Check `/health`, then open `/host` and `/display` to confirm the service is responding. Set `PUBLIC_BASE_URL` as described below if you want QR codes to use a canonical URL.
+11. In the service **Settings**, copy the assigned `onrender.com` URL and open it over HTTPS. Check `/health`, then open `/manager`, `/host` and `/display` to confirm the service is responding. Set `PUBLIC_BASE_URL` as described below if you want QR codes to use a canonical URL.
 
 The Blueprint uses `npm ci`, so a committed npm lockfile is required. It sets `autoDeployTrigger: "off"` to prevent a source push from restarting a live event. Do not claim a production deployment until the service is healthy and the game has been smoke-tested. Creating this repository configuration does not itself create cloud resources.
 
@@ -113,7 +113,7 @@ Use **one private games bucket**, not one bucket per game. Get The Picture uses 
    | `R2_SECRET_ACCESS_KEY` | Its corresponding secret access key. |
 
 3. Save and deploy the reviewed games release from Render's **Manual Deploy** menu. Automatic deploy remains disabled and the service remains single-instance. Supplying only some R2 variables is a startup error; leave all four unset/blank if using only starter images.
-4. Check `/health`. Sign in to `/host`, expand **Get The Picture - Image library & safety**, **Screengrabbers - Image album & questions** or **Lineup - Face album & headline library**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
+4. Check `/health`. Sign in to `/manager`, expand **Get The Picture - Image library & safety**, **Screengrabbers - Image album & questions** or **Lineup - Face album & headline library**, and confirm the upload form is available. An available form means the environment is configured, not that Cloudflare has accepted the credentials.
 5. Upload a small test image you own. Enter its title, accessibility description, and credit/source, and confirm permission to use it. A successful upload checks write access. Open its library preview to check read access.
 6. Choose Get The Picture, start a test round with that image, and check it on an independent phone and `/display` over the real HTTPS site. Confirm it finishes loading before starting the timer. This is the end-to-end Cloudflare verification; local tests with simulated storage do not verify a real account.
 
@@ -123,9 +123,9 @@ Players and the display use the app's same-origin image route, which redirects t
 
 ### Image operations, backup and billing
 
-- **Add:** Use the host upload form, not a public upload link. The operator must own or have suitable display rights for each image, obtain any necessary permissions, and review its visual content. Captions are filtered; image content is not automatically screened.
+- **Add:** Use the manager upload form, not a public upload link. The operator must own or have suitable display rights for each image, obtain any necessary permissions, and review its visual content. Captions are filtered; image content is not automatically screened.
 - **Select:** Choose an enabled image for the next round, or let the app randomly select unused images. The library cycles without an immediate repeat when multiple images remain available.
-- **Disable:** Use **Disable image** in the host library. This prevents future selection; it does not erase the file, break a round already using it, or stop storage billing. Library metadata and safety additions survive **New event**, unlike player registrations and scores.
+- **Disable:** Use **Disable image** in the manager library. This prevents future selection; it does not erase the file, break a round already using it, or stop storage billing. Library metadata and safety additions survive **New event**, unlike player registrations and scores.
 - **Back up:** R2 image files are not included in Render's database backup. Preserve original source images and a restricted copy of the bucket objects separately, along with a matching database backup containing titles, credits and R2 object keys. For a small library, use the bucket dashboard's download controls; an operator can use an S3-compatible backup tool for a larger library. Keep backups dedicated to games, private, and subject to the resort's retention policy.
 - **Remove permanently:** The app disables assets rather than deleting them. For permanent retirement or the 200-upload limit, an operator must back up, stop the games service (not just the round), remove the corresponding uploaded entry from `pictureImages` in the saved event snapshot, and delete exactly its `key` from this bucket. Do not remove the current round's image, delete the whole bucket, or guess object keys. Restart and verify the service afterward. This is an administrative maintenance operation, not a host game control.
 - **Rotate keys:** Create a replacement bucket-scoped S3 credential, update both access-key values in Render, redeploy outside event hours, and verify upload plus independent-device viewing. Revoke the old credential in Cloudflare after verification.
@@ -134,7 +134,7 @@ Players and the display use the app's same-origin image route, which redirects t
 ## Hosting and event security
 
 - Keep `HOST_PASSWORD`, `SESSION_SECRET`, `DATABASE_URL`, and R2 credentials in Render's environment settings. Never commit secrets, publish them in event materials, or share screenshots that expose them.
-- Use the HTTPS URL for hosts and guests. Host authentication uses a signed cookie that lasts 12 hours; guest sessions use a cookie that lasts 7 days. Host cookies are secure in production; do not operate the host panel over an untrusted connection.
+- Use the HTTPS URL for hosts and guests. Host authentication uses a signed cookie that lasts 12 hours; guest sessions use a cookie that lasts 7 days. The manager and host studio use the same password, cookie and permissions: separating the screens does not restrict host access to library edits. Host cookies are secure in production; do not operate either private screen over an untrusted connection.
 - Share the guest URL or QR code privately with event attendees. Do not publish the QR code or guest/host pages in a public place.
 - The display is intended for projection. Use `/display` for the public view: its API and real-time connection force sanitized data even when opened in a host browser. Do not project the host screen. Drawings become public at **Show both drawings**, not at the later answer reveal.
 - The service stores player identities and scores for the current event. **Conclude event** ends the event without clearing its registrations and scores. **New event** is the destructive reset: it clears guest registrations, scores, rooms, and game state; old guest cookies no longer identify players, while the independent host login cookie remains valid. Treat the snapshot as event data; arrange any needed records and retention with the resort before resetting.
@@ -145,6 +145,8 @@ Players and the display use the app's same-origin image route, which redirects t
 ## Running an event
 
 ### Host and guest setup
+
+Use `/manager` to prepare the Get The Picture image library and safety additions, Screengrabbers images and questions, and Lineup photos and headlines, even before an event is open. Each game retains its existing shared library across events; no separate library selection or migration is needed. Use **Open host studio** and **Manage game libraries** to move between the private workspaces. Save edits before leaving: the browser warns about unfinished manager changes, but drafts are not stored across page reloads. Clearing an editor or switching to another saved question also asks before discarding unsaved changes. Library edits and disabling affect future rounds; safety additions apply to subsequent captions, including during an active round. The host studio retains live caption moderation and next-image selection.
 
 Use a laptop connected to the TV/projector by HDMI for the most predictable display setup. Select **Extend desktop**, not mirror, move the `/display` browser window onto the external screen, and make that window fullscreen. Keep `/host` on the laptop's private screen or a separate phone/tablet. Disable notifications and screen sleep on the display computer. Mirroring the host desktop would expose secret prompts and previews.
 
@@ -219,7 +221,7 @@ Screengrabbers is an "at the movies" image quiz with a cinema marquee, red curta
 
 ### Build the image album and question library
 
-1. Sign in to `/host` and expand **Screengrabbers - Image album & questions**. Configure R2 using the complete steps above if uploads are unavailable. You can prepare the library before opening an event.
+1. Sign in to `/manager` and expand **Screengrabbers - Image album & questions**. Configure R2 using the complete steps above if uploads are unavailable. You can prepare the library before opening an event.
 2. Upload a still JPEG, PNG or WebP up to 5 MB. Supply a private title, an accessibility description, a credit/source, and confirmation of permission and audience suitability. Movie screenshots may require appropriate display rights; the application does not provide licensed movie assets or determine those rights for you. Review image content yourself.
 3. Keep the accessibility description **spoiler-free**: guests can read it during answering. Private titles never appear on guest screens. Credits/sources appear only after the answer reveal because they may name the film.
 4. Select an uploaded image under **Attach a question**, enter a question (up to 240 characters), provide 2-6 distinct choices (up to 120 characters each), select the correct choice, and save. Add another question against the same image if needed. Up to 1,000 saved questions are supported.
@@ -251,12 +253,12 @@ Lineup is a celebrity-headline quiz styled as a gossip magazine. It supports 2-1
 
 1. Use the existing dedicated games Render service, PostgreSQL database and private games R2 bucket. If uploads are not configured, complete **Optional private image uploads (Cloudflare R2 + Render)** above. Lineup requires uploads; it includes no celebrity assets.
 2. With games R2 already configured, keep all four existing R2 variables and credentials unchanged. No new Render variables, database tables to create manually, Cloudflare bucket/token, CORS rule, DNS change or Vercel configuration is required. Uploads create the `lineup/` prefix automatically.
-3. Back up the database snapshot and matching R2 objects. Manually deploy the release on the existing games service outside event hours; keep one instance and autoscaling disabled. Check `/health`, sign in to `/host`, and verify **Lineup - Face album & headline library** and **Start Lineup** appear.
+3. Back up the database snapshot and matching R2 objects. Manually deploy the release on the existing games service outside event hours; keep one instance and autoscaling disabled. Check `/health`, sign in to `/manager`, and verify **Lineup - Face album & headline library** appears. Open `/host` and verify **Start Lineup** appears.
 4. Upload two test photos and save a headline. Confirm that both photos load on a phone and `/display`, then complete a test round through reveal. An enabled upload form alone does not verify R2 credentials. Do not reuse other resort infrastructure.
 
 #### Build the face album and headline library
 
-1. Expand **Lineup - Face album & headline library**. Upload individual face photos, not a finished collage. Each upload accepts a still JPEG, PNG or WebP up to 5 MB and 20 megapixels and requires a private title, spoiler-free accessibility description, source/credit, and permission/suitability confirmation. Review display rights and audience suitability yourself. Images are optimized to WebP; keep your originals.
+1. In `/manager`, expand **Lineup - Face album & headline library**. Upload individual face photos, not a finished collage. Each upload accepts a still JPEG, PNG or WebP up to 5 MB and 20 megapixels and requires a private title, spoiler-free accessibility description, source/credit, and permission/suitability confirmation. Review display rights and audience suitability yourself. Images are optimized to WebP; keep your originals.
 2. Once at least two photos exist, enter a headline/caption of up to 240 characters. Choose 2-4 different album images in reading order. Use **Add face** or **Remove last face** to change the panel count.
 3. The collage uses two photos side by side, three across, or four in a 2-by-2 grid. Every photo has the same 3:4 frame on every screen. Adjust horizontal and vertical focal sliders to reposition the image inside that frame; cropping is visual, not destructive. There is no automatic face detection. Use clear, tightly framed photos, particularly for a three-photo row on phones.
 4. Review the full and **Mobile-sized preview**, then click the correct face in either preview. The selected correct panel is outlined and marked in the private editor. Panels are not shuffled. There are no visible answer numbers during play; neutral photo labels support keyboards and screen readers.
@@ -296,7 +298,7 @@ This caption game runs standalone or in a Variety Show with the same Silly Names
 
 The host can remove a caption during collection, selection or voting in all formats. Removal cannot be undone in that round. If a removed caption already has ballots, those ballots are withdrawn and affected players may choose another remaining finalist. This is an explicit moderation withdrawal, not an extra counted vote. There is no host override that restores an automatically rejected caption. An unscored round can be cancelled without awarding points.
 
-Keep `/host` private; project only `/display`. In particular, do not project the host's raw review queue or safety settings.
+Keep `/host` and `/manager` private; project only `/display`. In particular, do not project the host's raw review queue or the manager's safety settings.
 
 #### Caption safety policy and maintenance
 
@@ -304,7 +306,7 @@ Filtering runs locally on the server and does not send captions to an external A
 
 This is **best-effort filtering, not semantic understanding or a guarantee**. Novel insults, sarcasm, euphemisms, ambiguous surnames and new political figures can evade a rules-based filter; innocent language can also be rejected. Use Large audience mode whenever every public caption must receive human review. Small-room and poolside modes retain their requested automatic/player selection flows and therefore do not have a guaranteed human safety gate.
 
-In the host's **Image library & safety**, add venue-specific blocked names, phrases or newly discovered evasions, one phrase per line, up to 100 phrases / 4,000 characters, then save before opening captions. These additions cannot remove built-in restrictions and survive new events. Changes apply to subsequent submissions; remove an already accepted caption separately if necessary. Rejected raw captions are not persisted or broadcast.
+In the manager's **Image library & safety**, add venue-specific blocked names, phrases or newly discovered evasions, one phrase per line, up to 100 phrases / 4,000 characters, then save before opening captions. These additions cannot remove built-in restrictions and survive new events. Changes apply to subsequent submissions; remove an already accepted caption separately if necessary. Rejected raw captions are not persisted or broadcast.
 
 `lib/political-names.json` contains public-domain (CC0) full-name aliases from the `unitedstates/congress-legislators` current roster, with its source and import date. The filter also includes presidential, common political, and Florida political aliases in `lib/caption-filter.js`. It does not retrieve a live politician list during an event. After elections, appointments or vacancies, refresh the roster in a development checkout:
 
@@ -335,7 +337,7 @@ In Family Cards, expired submissions reveal the accepted finalists and begin a f
 1. Before provider maintenance, a database migration, or a potentially disruptive change, open the Render PostgreSQL resource and review its **Backups** page and current retention/restore options.
 2. Create or confirm a current backup using the controls Render presents for that database. Record the backup time and database identity in the resort's restricted operations log.
 3. For a restore, use Render's database backup/restore controls and follow the dashboard's confirmation prompts. Verify the target database carefully; restore can replace newer data.
-4. After restore, confirm the web service still uses the intended database connection, then check `/health`, `/host`, `/display`, and the event snapshot before resuming.
+4. After restore, confirm the web service still uses the intended database connection, then check `/health`, `/manager`, `/host`, `/display`, and the event snapshot before resuming.
 
 Do not assume that a deploy rollback restores database contents: application deployments and PostgreSQL data are separate. Test backup recovery in a non-production environment when possible. Keep backups private because they contain event state.
 
